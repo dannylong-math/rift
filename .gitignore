@@ -1,4 +1,8 @@
 build/
 build-*/
 .cache/
+.dependencies/
+__pycache__/
 compile_commands.json
+docs/_build/
+docs/api/generated/
