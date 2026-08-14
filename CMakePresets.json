@@ -36,11 +36,21 @@
     {
       "name": "release-max",
       "displayName": "Release (max optimizations)",
-      "description": "If your domain guarantees no NaN or Inf can ever appear, add -ffinite-math-only for additional gains. It lets the compiler eliminate all NaN/Inf guards, but produces silent wrong results if a NaN does appear — use only when you have a proof your inputs are finite.",
+      "description": "Aggressive floating-point optimizations. Use only when the model's numerical assumptions permit reassociation and reciprocal approximations.",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_CXX_FLAGS_RELEASE": "-O3 -march=native -DNDEBUG -fno-math-errno -fno-trapping-math -fno-signed-zeros -fassociative-math -freciprocal-math"
+      }
+    },
+    {
+      "name": "docs",
+      "displayName": "Documentation",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "RIFT_DOCUMENTATION_ONLY": "ON",
+        "RIFT_BUILD_DOCUMENTATION": "ON"
       }
     }
   ],
@@ -48,7 +58,8 @@
     { "name": "debug",       "configurePreset": "debug"       },
     { "name": "debug-tidy",  "configurePreset": "debug-tidy"  },
     { "name": "release",     "configurePreset": "release"     },
-    { "name": "release-max", "configurePreset": "release-max" }
+    { "name": "release-max", "configurePreset": "release-max" },
+    { "name": "docs",        "configurePreset": "docs", "targets": ["docs"] }
   ],
   "testPresets": [
     { "name": "debug",       "configurePreset": "debug",       "output": { "outputOnFailure": true } },
