@@ -99,7 +99,7 @@ if(NOT RIFT_DOCUMENTATION_ONLY)
         $<INSTALL_INTERFACE:include>
     )
     target_compile_features(rift PUBLIC cxx_std_23)
-    target_link_libraries(rift PRIVATE rift_warnings rift_sanitizers)
+    target_link_libraries(rift  rift_warnings rift_sanitizers)
     deal_ii_setup_target(rift)
 
     option(BUILD_TESTING "Build tests" ON)
