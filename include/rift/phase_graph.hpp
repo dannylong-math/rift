@@ -602,7 +602,7 @@ struct InterfaceDescriptor {
  * construction attempt may contain more than one code.
  * \ingroup phase_graph
  */
-enum class PhaseGraphErrorCode : std::uint8_t{
+enum class PhaseGraphErrorCode : std::uint8_t {
     /**
      * \brief No phase specifications were supplied.
      */
