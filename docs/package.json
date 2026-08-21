@@ -1,0 +1,14 @@
+{
+  "name": "rift-docs",
+  "private": true,
+  "scripts": {
+    "build": "sourcey build -o dist",
+    "dev": "sourcey dev"
+  },
+  "devDependencies": {
+    "sourcey": "3.6.5"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}

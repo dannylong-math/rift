@@ -1,4 +1,11 @@
 build/
 build-*/
 .cache/
+.dependencies/
+__pycache__/
 compile_commands.json
+docs/dist/
+docs/node_modules/
+*.pyc
+_planning/
+.venv*
