@@ -81,3 +81,6 @@ Open `docs/dist/index.html`. Sourcey builds the narrative guides from Markdown
 and the C++ API reference from the Doxygen XML generated from public headers.
 GitHub Actions builds the site on pull requests and deploys it to GitHub Pages
 after pushes to `main`.
+
+The generated [contributor guide](docs/contributing.md) records the focused
+unit-test naming and layout conventions used by the project.

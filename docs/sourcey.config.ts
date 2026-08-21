@@ -28,7 +28,7 @@ export default defineConfig({
           groups: [
             {
               group: "Getting Started",
-              pages: ["introduction", "theory/index"],
+              pages: ["introduction", "contributing", "theory/index"],
             },
             {
               group: "Architecture foundations",

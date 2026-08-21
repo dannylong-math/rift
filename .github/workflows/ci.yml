@@ -161,6 +161,7 @@ jobs:
             --filter "${GITHUB_WORKSPACE}/src/" \
             --exclude "${GITHUB_WORKSPACE}/build/" \
             --gcov-executable "${llvm_cov} gcov" \
+            --fail-under-line 100 \
             --xml-pretty \
             --output coverage.xml \
             build/coverage

@@ -1,3 +1,8 @@
+/**
+ * \file
+ * \brief Implementation of library-wide Rift metadata services.
+ */
+
 #include <rift/version.hpp>
 
 namespace rift {
