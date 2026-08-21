@@ -2,13 +2,17 @@ PROJECT_NAME           = "Rift"
 PROJECT_BRIEF          = "Sharp-interface multiphase flow research code"
 
 OUTPUT_DIRECTORY       = build/doxygen
-INPUT                  = include
-FILE_PATTERNS          = *.h *.hh *.hpp *.hxx
+INPUT                  = include src
+FILE_PATTERNS          = *.h *.hh *.hpp *.hxx *.cpp
 RECURSIVE              = YES
 
-EXTRACT_ALL            = YES
-EXTRACT_PRIVATE        = NO
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = YES
 EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+EXTRACT_ANON_NSPACES   = YES
+HIDE_UNDOC_MEMBERS     = NO
+INTERNAL_DOCS          = YES
 JAVADOC_AUTOBRIEF      = YES
 
 GENERATE_HTML          = NO
@@ -18,5 +22,9 @@ XML_OUTPUT             = xml
 
 QUIET                  = YES
 WARNINGS               = YES
-WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_UNDOCUMENTED   = YES
 WARN_IF_DOC_ERROR      = YES
+# Doxygen 1.9.8 reports false positives for documented C++23 functions here;
+# parameter and return documentation remains a project contribution rule.
+WARN_NO_PARAMDOC       = NO
+WARN_AS_ERROR          = FAIL_ON_WARNINGS

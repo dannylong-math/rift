@@ -97,7 +97,10 @@ if(ENABLE_CLANG_TIDY)
     set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")
 endif()
 
-add_library(rift STATIC src/rift.cpp)
+add_library(rift STATIC
+    src/phase_graph.cpp
+    src/rift.cpp
+)
 add_library(rift::rift ALIAS rift)
 
 target_include_directories(rift PUBLIC
