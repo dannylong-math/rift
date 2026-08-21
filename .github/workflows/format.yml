@@ -1,0 +1,92 @@
+name: Formatting
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  format:
+    name: Apply clang-format
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the writable branch
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+      - name: Check out a fork pull request
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        uses: actions/checkout@v6
+
+      - name: Report clang-format version
+        run: clang-format --version
+
+      - name: Apply formatting
+        env:
+          CLANG_FORMAT: clang-format
+        run: ./format.sh
+
+      - name: Detect formatting changes
+        id: changes
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          else
+            git diff --check
+            git diff --stat
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Commit formatting changes
+        id: commit
+        if: >-
+          github.event_name == 'pull_request' &&
+          steps.changes.outputs.changed == 'true' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --update
+          git commit -m "style: apply clang-format"
+          git push origin "HEAD:${HEAD_REF}"
+          echo "committed=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Run required checks on the formatting commit
+        if: steps.commit.outputs.committed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          gh workflow run format.yml --ref "${HEAD_REF}"
+          gh workflow run ci.yml --ref "${HEAD_REF}"
+          gh workflow run docs.yml --ref "${HEAD_REF}"
+
+      - name: Reject unformatted fork pull request
+        if: >-
+          github.event_name == 'pull_request' &&
+          steps.changes.outputs.changed == 'true' &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "Formatting changes cannot be pushed to a fork by GITHUB_TOKEN." >&2
+          echo "Run ./format.sh, commit the result, and push it to the pull request branch." >&2
+          exit 1
+
+      - name: Reject an unformatted dispatched ref
+        if: github.event_name == 'workflow_dispatch' && steps.changes.outputs.changed == 'true'
+        run: |
+          echo "The formatting commit is not clean after clang-format." >&2
+          exit 1

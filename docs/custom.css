@@ -1,0 +1,39 @@
+/* Rift documentation theme refinements. */
+
+/* Sourcey 3.6.5 caps its outer navigation and documentation containers with
+ * the max-w-[92rem] utility. Retain its responsive behavior while allowing
+ * more room for C++ declarations on large displays. */
+#sourcey #page .max-w-\[92rem\] {
+  max-width: min(100%, var(--content-max-width));
+}
+
+/* Sourcey deliberately adds visible backticks around inline code. Use a
+ * conventional code chip instead. The two IDs keep these rules authoritative
+ * even though Sourcey loads its generated stylesheet after custom CSS. */
+#sourcey #page .prose :not(pre) > code,
+#sourcey #page .not-prose :not(pre) > code {
+  padding: 0.08em 0.35em;
+  border: 1px solid rgb(var(--color-gray-200) / 0.9);
+  border-radius: 0.3rem;
+  background-color: rgb(var(--color-gray-100) / 0.85);
+  color: rgb(var(--color-gray-800));
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  font-weight: 500;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+#sourcey #page .prose :not(pre) > code::before,
+#sourcey #page .prose :not(pre) > code::after,
+#sourcey #page .not-prose :not(pre) > code::before,
+#sourcey #page .not-prose :not(pre) > code::after {
+  content: none;
+}
+
+.dark #sourcey #page .prose :not(pre) > code,
+.dark #sourcey #page .not-prose :not(pre) > code {
+  border-color: rgb(var(--color-gray-700) / 0.9);
+  background-color: rgb(var(--color-gray-800) / 0.8);
+  color: rgb(var(--color-gray-200));
+}

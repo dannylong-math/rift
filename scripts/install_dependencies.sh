@@ -17,6 +17,7 @@ INSTALL_SCIENCE=true
 INSTALL_DOCS=true
 CHECK_ONLY=false
 JOBS=""
+SCIENCE_VARIANT="all"
 
 usage() {
     printf '%s\n' \
@@ -27,7 +28,8 @@ usage() {
         "Options:" \
         "  --prefix PATH       Dependency root (default: .dependencies)" \
         "  --jobs N            Parallel jobs (default: CPU count, capped at 8)" \
-        "  --docs-only         Install only the Python documentation tools" \
+        "  --variant NAME      Science build variant: debug, release, or all (default: all)" \
+        "  --docs-only         Install only the Sourcey documentation packages" \
         "  --science-only      Install only zlib, p4est, and deal.II" \
         "  --check             Check host prerequisites without installing" \
         "  -h, --help          Show this help"
@@ -48,6 +50,11 @@ while (($# > 0)); do
         --jobs)
             (($# >= 2)) || die "--jobs requires a positive integer"
             JOBS="$2"
+            shift 2
+            ;;
+        --variant)
+            (($# >= 2)) || die "--variant requires debug, release, or all"
+            SCIENCE_VARIANT="$2"
             shift 2
             ;;
         --docs-only)
@@ -85,6 +92,8 @@ if [[ -z "${JOBS}" ]]; then
     fi
 fi
 [[ "${JOBS}" =~ ^[1-9][0-9]*$ ]] || die "--jobs must be a positive integer"
+[[ "${SCIENCE_VARIANT}" =~ ^(debug|release|all)$ ]] ||
+    die "--variant must be debug, release, or all"
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
@@ -137,10 +146,24 @@ check_prerequisites() {
     fi
 
     if [[ "${INSTALL_DOCS}" == true ]]; then
-        require_command python3
-        python3 -c 'import venv' >/dev/null 2>&1 ||
-            die "Python's venv module is unavailable (Ubuntu package: python3-venv)"
-        printf 'Python:          %s\n' "$(command -v python3)"
+        require_command doxygen
+        require_command node
+        require_command npm
+
+        local node_version
+        local node_major
+        local node_minor
+        node_version="$(node --version)"
+        node_version="${node_version#v}"
+        IFS=. read -r node_major node_minor _ <<< "${node_version}"
+        [[ "${node_major}" =~ ^[0-9]+$ && "${node_minor}" =~ ^[0-9]+$ ]] ||
+            die "could not determine the installed Node.js version"
+        ((node_major > 22 || (node_major == 22 && node_minor >= 12))) ||
+            die "Node.js 22.12 or newer is required for the documentation"
+
+        printf 'Doxygen:         %s\n' "$(command -v doxygen)"
+        printf 'Node.js:         %s\n' "$(command -v node)"
+        printf 'npm:             %s\n' "$(command -v npm)"
     fi
 }
 
@@ -356,28 +379,28 @@ install_science_dependencies() {
     extract_archive "${dealii_archive}" "${dealii_source}"
 
     install_zlib "${zlib_source}"
-    install_p4est_variant "${p4est_source}" debug
-    install_p4est_variant "${p4est_source}" release
-    install_dealii_variant "${dealii_source}" debug
-    install_dealii_variant "${dealii_source}" release
+
+    if [[ "${SCIENCE_VARIANT}" == "debug" || "${SCIENCE_VARIANT}" == "all" ]]; then
+        install_p4est_variant "${p4est_source}" debug
+        install_dealii_variant "${dealii_source}" debug
+    fi
+
+    if [[ "${SCIENCE_VARIANT}" == "release" || "${SCIENCE_VARIANT}" == "all" ]]; then
+        install_p4est_variant "${p4est_source}" release
+        install_dealii_variant "${dealii_source}" release
+    fi
 }
 
 install_documentation_dependencies() {
-    local virtual_environment="${DEPENDENCY_ROOT}/docs"
-
-    if [[ ! -x "${virtual_environment}/bin/python" ]]; then
-        printf 'Creating documentation environment in %s\n' "${virtual_environment}"
-        python3 -m venv "${virtual_environment}"
-    fi
-
-    "${virtual_environment}/bin/python" -m pip install \
-        --disable-pip-version-check \
-        --no-cache-dir \
-        --requirement "${REPOSITORY_ROOT}/docs/requirements.txt"
+    printf 'Installing pinned Sourcey packages in %s\n' "${REPOSITORY_ROOT}/docs"
+    npm ci --prefix "${REPOSITORY_ROOT}/docs"
 }
 
 printf 'Dependency root: %s\n' "${DEPENDENCY_ROOT}"
 printf 'Parallel jobs:   %s\n' "${JOBS}"
+if [[ "${INSTALL_SCIENCE}" == true ]]; then
+    printf 'Science variant: %s\n' "${SCIENCE_VARIANT}"
+fi
 
 if [[ "${INSTALL_SCIENCE}" == true ]]; then
     install_science_dependencies
@@ -392,5 +415,9 @@ if [[ "${INSTALL_SCIENCE}" == true ]]; then
     printf 'Configure Rift with: cmake --preset debug\n'
 fi
 if [[ "${INSTALL_DOCS}" == true ]]; then
-    printf 'Build documentation with: cmake --preset docs && cmake --build --preset docs\n'
+    printf '%s\n' \
+        'Build documentation with:' \
+        '  cmake -E make_directory build/doxygen' \
+        '  doxygen Doxyfile' \
+        '  npm run --prefix docs build'
 fi

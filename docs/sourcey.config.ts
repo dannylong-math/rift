@@ -1,17 +1,35 @@
-import { defineConfig, markdown } from "sourcey";
+import { defineConfig, doxygen, markdown } from "sourcey";
 
 export default defineConfig({
   name: "Rift",
   repo: "https://github.com/dannylong-math/rift",
   editBranch: "main",
-  editBasePath: "docs",
+  prettyUrls: "slash",
+  theme: {
+    colors: {
+      primary: "#0F766E",
+      light: "#5EEAD4",
+      dark: "#115E59",
+    },
+    fonts: {
+      sans: "Inter",
+    },
+    layout: {
+      content: "112rem",
+    },
+    css: ["./custom.css"],
+  },
   navigation: {
     tabs: [
       {
-        tab: "Guide",
+        tab: "Guides",
         slug: "",
         source: markdown({
           groups: [
+            {
+              group: "Getting Started",
+              pages: ["introduction", "theory/index"],
+            },
             {
               group: "Architecture foundations",
               pages: [
@@ -63,6 +81,15 @@ export default defineConfig({
               ],
             },
           ],
+        }),
+      },
+      {
+        tab: "C++ API",
+        slug: "api",
+        source: doxygen({
+          xml: "../build/doxygen/xml",
+          language: "cpp",
+          index: "flat",
         }),
       },
     ],

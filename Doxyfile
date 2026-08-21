@@ -1,0 +1,22 @@
+PROJECT_NAME           = "Rift"
+PROJECT_BRIEF          = "Sharp-interface multiphase flow research code"
+
+OUTPUT_DIRECTORY       = build/doxygen
+INPUT                  = include
+FILE_PATTERNS          = *.h *.hh *.hpp *.hxx
+RECURSIVE              = YES
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+JAVADOC_AUTOBRIEF      = YES
+
+GENERATE_HTML          = NO
+GENERATE_LATEX         = NO
+GENERATE_XML           = YES
+XML_OUTPUT             = xml
+
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
