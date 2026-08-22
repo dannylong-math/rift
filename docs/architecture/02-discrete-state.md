@@ -1,213 +1,307 @@
 ---
 title: Discrete state and DoF ownership
-description: Contract for central state storage, phase-local field groups, support envelopes, and deal.II spaces.
+description: Implemented workflow for phase-local deal.II spaces, support envelopes, regional entries, and immutable state snapshots.
 ---
 
 # Discrete state and DoF ownership
 
 ## Context
 
-Different phase physics require different unknowns. A fully compressible fluid,
-a general-EOS low-Mach fluid, an incompressible mixture, and an Eulerian solid
-must not be forced into one padded global finite-element system. Rift instead
-uses phase-local field groups while keeping all vector ownership in one central
-state store.
+Different phase models require different unknowns. A compressible fluid, a
+low-Mach fluid, and an Eulerian solid should not be forced into one padded
+finite-element system simply because they share a background mesh. Rift gives
+each phase-local field group its own deal.II `DoFHandler`, while one central
+state store retains the corresponding distributed vectors.
 
-Each field group has its own deal.II `DoFHandler`. Examples include a
-hydrodynamic group, a species group, or a pressure/constraint group. Splitting
-groups permits different finite elements and block treatment without giving
-individual physics objects ownership of distributed vectors.
+A field group is an independently numbered collection such as flow variables,
+species, or a pressure constraint field. A phase may own several groups with
+different component counts and polynomial degrees. The geometry-defining
+level-set fields form one additional group, but that group is defined over the
+entire background mesh rather than one phase's support.
 
-## Responsibilities
+This separation answers two different questions explicitly:
 
-The discrete-state layer must:
+- `SpaceRegistry` decides where degrees of freedom exist and how they are
+  numbered for one `SpaceEpoch`.
+- `StateStore` decides which immutable values are accepted, previous, or
+  private trial data within that layout.
 
-- define the field groups required by every node in the [runtime phase
-  graph](01-phase-graph.md);
-- own all current, previous, stage, trial, residual, and update vectors in a
-  central state store;
-- own one full-background level-set field group, containing all components of
-  the configured `LevelSetFieldSet`, used by [geometry and
-  topology](03-geometry-topology.md);
-- build multiple phase-local `DoFHandler`s when a phase schema contains
-  independently managed field groups;
-- use a real finite element on a phase's solve-time support envelope and a
-  non-dominating `FE_Nothing` outside it;
-- apply hanging-node, continuity, boundary, and algebraic constraints at the
-  appropriate field-group boundary; and
-- construct and own the maximum `LimiterGraph` for each participating field
-  group from its support envelope, constraints, and registered limiter
-  capability; and
-- publish immutable space and state snapshots stamped with `SpaceEpoch` and
-  a unique `StateSnapshotId`; only an accepted bundle also carries the live
-  `StateEpoch`.
+Neither object decides which phase currently occupies a quadrature point.
+That belongs to [geometry and topology](03-geometry-topology.md).
 
-The first implementation uses continuous Galerkin spaces and uniform
-polynomial degree within each field group. Adaptive mesh refinement is
-supported from version 1, but changing polynomial degree cell by cell is not.
-An accepted mesh refinement or coarsening therefore changes the mesh and the
-`SpaceEpoch`, while all non-`FE_Nothing` cells of a group still use the same
-degree.
+## Implemented first-stage boundary
 
-## Staged space construction
+The first implementation provides:
 
-Space creation has a deliberate draft phase because connected-region rows are
-known only after target geometry exists. `SpaceRegistry` first creates a
-`SpaceDraft` carrying the provisional `SpaceEpoch`, field-group DoFHandlers,
-constraints, field-only partitioners, a `FieldLayoutDraft`, and the maximum
-limiter graphs. It contains no backend binding and is not publishable.
+- strongly typed identities for field groups, regional entries, spaces,
+  complete state snapshots, accepted revisions, and level-set revisions;
+- one independently owned `DoFHandler` and constraint matrix for every
+  phase-local field group;
+- stable support envelopes represented by sets of active `dealii::CellId`
+  values;
+- a real continuous-Galerkin element inside each envelope and component-
+  compatible, non-dominating `FE_Nothing` outside it;
+- one full-background level-set group that never selects `FE_Nothing`;
+- uniform polynomial degree within each field group, in both 2D and 3D;
+- staged construction through `SpaceDraft` followed by regional-layout
+  finalization;
+- centrally allocated native
+  `dealii::LinearAlgebra::distributed::Vector<double>` storage;
+- immutable accepted, previous, and private state snapshots;
+- copy-isolated, move-only mutable transactions; and
+- exact tracking of whether level-set values changed when a trial was sealed.
 
-During adaptation, `TransferWorkspace` owns provisional field vectors using
-that field-only layout. This is where deal.II `SolutionTransfer` interpolates;
-the central `StateStore` is not constructed with a partial final layout.
-Geometry reconstruction may borrow the draft's level-set space and transferred
-level-set buffer. Once `RegionalConstraintSystem` builds the global schema,
-`SpaceRegistry` finalizes the complete `StateLayout` and immutable
-`SpaceSnapshot`, and `StateStore` adopts the field buffers plus regional
-entries. Only then may `ExecutionBackend` build its separately owned binding
-from the final space. Initial construction and every rebuild follow the same
-ordering.
+The first stage closes hanging-node and continuous finite-element constraints.
+Boundary constraints, algebraic constraints, limiter graphs, adaptive transfer,
+and adopting pre-transferred field buffers remain later implementation stages.
+They must extend the finalized layout rather than move vector ownership into a
+phase model.
 
-## Support envelope versus occupied region
+## Complete construction and state workflow
 
-A phase's **occupied region** is the current region reconstructed from the
-level set. Its **support envelope** is the larger set of background cells on
-which that phase's field groups have real degrees of freedom for one nonlinear
-solve. The envelope includes the cells in which the interface is permitted to
-move during that solve.
-
-The support envelope is immutable from nonlinear initialization through
-acceptance or rollback. Consequently, a geometry update inside the envelope
-does not redistribute degrees of freedom. If the zero contour exits the
-envelope, the solve attempt fails cleanly; the coordinator may enlarge the
-envelope, reserve a new provisional `SpaceEpoch`, rebuild spaces and vectors,
-commit that epoch, and restart from
-a recoverable state. It must never clip the interface motion to preserve the
-old layout.
-
-Non-dominating `FE_Nothing` is required outside the envelope so an inactive
-cell contributes no unknowns and does not incorrectly dominate hp-interface
-constraints against neighboring active elements.
-
-## Non-responsibilities
-
-The state store does not decide which phase occupies a quadrature point, build
-cut quadrature, choose material-interface laws, or traverse cells. It exposes
-state and local-index views to the [typed worksets](05-worksets.md); numerical
-operators cannot retain mutable vector ownership.
-
-The full-background level-set field set is geometrically special but not globally
-mutable state hidden inside the geometry manager. It participates in the
-coupled nonlinear state and is versioned and rolled back with the other field
-groups.
-
-## Conceptual C++ API
+The normal workflow is: build the runtime phase graph, describe field groups,
+construct a provisional space draft, add the regional schema, and only then
+create state vectors. This complete single-process example uses MPI explicitly,
+as production and test code do:
 
 ```cpp
-using FieldGroupId = StrongId<struct FieldGroupTag>;
+#include <deal.II/base/mpi.h>
+#include <deal.II/grid/grid_generator.h>
+#include <deal.II/grid/tria.h>
+#include <iostream>
+#include <memory>
+#include <rift/discrete_state.hpp>
+#include <utility>
 
-struct StateSnapshotStamp {
-  SpaceEpoch space;
-  StateSnapshotId snapshot;
-  std::optional<StateEpoch> published_epoch;
-};
+int main(int argc, char **argv)
+{
+  dealii::Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
 
-struct FieldGroupSpace {
-  PhaseId phase;
-  FieldGroupId group;
-  std::shared_ptr<const dealii::DoFHandler<dim>> dof_handler;
-  std::shared_ptr<const dealii::AffineConstraints<double>> constraints;
-  SpaceEpoch epoch;
-};
+  auto graph_result =
+      rift::make_phase_graph({{"gas", "compressible"}}, {});
+  if (!graph_result) {
+    for (const auto &error : graph_result.error())
+      std::cerr << error.message << '\n';
+    return 1;
+  }
+  auto graph = std::move(graph_result).value();
+  const rift::PhaseId gas = graph.find_phase("gas").value();
 
-class StateStore {
-public:
-  StateSnapshot snapshot(StateSlot) const;
-  MutableStateTransaction begin_trial(StateSnapshotId base);
-  SpaceEpoch space_epoch() const;
-};
+  auto mesh = std::make_shared<dealii::Triangulation<2>>();
+  dealii::GridGenerator::hyper_cube(*mesh);
 
-class SpaceRegistry {
-public:
-  const FieldGroupSpace &space(PhaseId, FieldGroupId) const;
-  const FieldGroupSpace &level_set_space() const;
-  SpaceDraft begin_draft(SpaceEpoch provisional);
-  SpaceSnapshot finalize(SpaceDraft &&, const RegionalSchemaSet &);
-};
+  rift::SupportEnvelope gas_support;
+  for (const auto &cell : mesh->active_cell_iterators())
+    gas_support.insert(cell->id());
+
+  rift::SpaceSpecification specification{
+      .phase_fields = {{gas, "flow", 4, 1, gas_support}},
+      .level_set = {"level_sets", 1, 1},
+  };
+
+  rift::SpaceRegistry<2> registry(mesh, MPI_COMM_SELF);
+  auto draft = registry.begin_draft(graph, std::move(specification));
+  if (!draft) {
+    for (const auto &error : draft.error())
+      std::cerr << error.message << '\n';
+    return 1;
+  }
+
+  auto space = registry.finalize(std::move(draft).value(),
+                                 {{"closed_region_pressure"}});
+  if (!space) {
+    for (const auto &error : space.error())
+      std::cerr << error.message << '\n';
+    return 1;
+  }
+
+  const rift::FieldGroupId flow =
+      space->find_field(gas, "flow").value();
+  rift::StateStore state(space->layout());
+  const auto initial = state.snapshot(rift::StateSlot::accepted);
+
+  auto trial = state.begin_trial(initial.stamp().snapshot);
+  trial.field(flow) = 1.0;
+  const auto candidate = trial.seal();
+  const auto accepted = state.publish(candidate.stamp().snapshot);
+
+  std::cout << "accepted epoch "
+            << accepted.stamp().published_epoch->value() << '\n';
+}
 ```
 
-`MutableStateTransaction` isolates a nonlinear trial update. Sealing it creates
-a new immutable `StateSnapshotId` inside the open attempt; abandoning it drops
-the candidate without copying ownership into a phase operator. Only the
-top-level driver can publish an accepted endpoint or accepted-state operation,
-which advances `StateEpoch`. Geometry rebuilt from changed geometry fields
-records their `LevelSetFieldSetSnapshotId` and its own private
-`GeometrySnapshotId`.
+`begin_draft()` and `finalize()` both return `std::expected` results containing
+all independently detected validation errors for their stage. Numerical state
+mutation begins only after both stages succeed.
 
-The `RegionalConstraintSystem` finalizes global entries after combining phase
-capabilities, connected regions, and boundary assignments. For example, a
-closed low-Mach region adds both one spatially uniform thermodynamic-pressure
-unknown and its compatibility row, while an open prescribed-pressure region
-adds neither solved entry. The central state store owns every resulting block;
-its residuals are produced by reduction worksets rather than ordinary cells.
+## Phase-local spaces and support envelopes
+
+A phase's **occupied region** is the region reconstructed from current
+level-set values. Its **support envelope** is the larger, immutable set of
+background cells on which a field group has real degrees of freedom during one
+nonlinear attempt. The envelope should include every cell into which the
+interface is permitted to move before acceptance or rollback.
+
+For a scalar field group, supported cells select `FE_Q`; unsupported cells
+select a non-dominating `FE_Nothing`. A multi-component group uses matching
+`FESystem` wrappers for both alternatives. Matching the component structure is
+important: deal.II's finite-element domination logic cannot safely compare a
+vector-valued `FESystem` with a bare scalar `FE_Nothing`.
+
+Every cell identity in the configured envelope must name an active cell on the
+registry's mesh. The registry rejects stale, refined-away, or unrelated cell
+identities before distributing degrees of freedom. Once accepted, the exact
+envelope is retained in `FieldGroupSpace` for inspection and diagnostics.
+
+The level-set group follows a different rule. Every active background cell
+uses the real element, so level-set values remain available wherever geometry
+must be reconstructed. Its `FieldGroupId` follows all phase-local group IDs in
+the finalized layout.
+
+## Stable field ordering and lookup
+
+Input field declarations are canonicalized by `(PhaseId, name)`. The registry
+then assigns contiguous `FieldGroupId` values in that order. Reordering a
+logically identical input specification therefore does not change field IDs.
+
+`SpaceSnapshot::find_field(phase, name)` is the configuration and diagnostic
+lookup. It returns no value for an absent name. `field_space(phase, id)` is the
+checked identity lookup used after configuration: it rejects an ID belonging
+to another phase instead of silently returning the wrong space.
+
+Each returned `FieldGroupSpace` exposes its own `DoFHandler`, closed
+constraints, component count, polynomial degree, support envelope, and epoch.
+These are immutable views. The space data retains shared ownership of the
+background triangulation, so the attached deal.II objects remain valid for the
+space snapshot's lifetime.
+
+## Why construction has two stages
+
+Connected-region unknowns are not necessarily known when phase fields are
+first constructed. For example, a closed low-Mach region may add a spatially
+uniform thermodynamic-pressure unknown after target geometry has been
+classified.
+
+`SpaceRegistry::begin_draft()` therefore builds only the field spaces. It
+reserves the provisional `SpaceEpoch` before validation starts; a rejected
+draft still consumes its identity, preventing stale cached data from aliasing
+a later rebuild. `SpaceDraft` is move-only and exposes no `StateLayout`, so it
+cannot accidentally initialize a partial `StateStore`.
+
+`SpaceRegistry::finalize()` validates the regional-entry names, sorts them
+lexicographically, assigns stable `RegionalEntryId` values, and creates the
+complete layout. In this first implementation each regional scalar uses a
+one-entry distributed vector whose sole entry is owned by MPI rank zero.
+Finalization preserves the draft's `SpaceEpoch`.
+
+Future transfer support will use a separate provisional workspace between
+these two stages. It will not weaken the rule that a normal `StateStore` owns a
+complete finalized layout.
+
+## Immutable snapshots and mutable transactions
+
+Constructing `StateStore` allocates every field and regional vector from the
+layout and publishes a zero-initialized accepted snapshot. A state stamp has
+three identities:
+
+- `SpaceEpoch` says how to interpret all vector indices;
+- `StateSnapshotId` uniquely names the complete immutable vector bundle; and
+- optional `StateEpoch` says that the bundle was published as an accepted
+  revision.
+
+`begin_trial(base_id)` copies a retained immutable bundle into transaction-
+private vectors. Mutable access is available only through that transaction.
+Calling `seal()` transfers the private vectors into a new immutable snapshot
+with a new `StateSnapshotId` and no published epoch. The base remains unchanged.
+Calling `abandon()`, assigning another transaction, or destroying an unsealed
+transaction discards its private vector copy.
+
+Transactions are move-only. Moving one transfers its sole mutable authority
+and makes the source inactive. `StateStore` itself is neither copyable nor
+movable because active transactions retain a pointer to their owning store;
+keeping the store at a stable address makes that lifetime rule explicit.
+
+`publish(candidate_id)` accepts only a private sealed candidate. It preserves
+the candidate's `StateSnapshotId`, assigns a new `StateEpoch`, shifts the old
+accepted snapshot into the `previous` slot, and installs the candidate as
+accepted. Publication does not change `SpaceEpoch`. Private snapshots may
+instead remain retained as nonlinear base points or be removed with
+`discard()`.
+
+## Level-set revision tracking
+
+Every complete state snapshot also carries a
+`LevelSetFieldSetSnapshotId`. When a trial is sealed, Rift compares the locally
+owned level-set vector entries exactly with those of its base and combines the
+result over the layout communicator. Changing only a phase or regional block
+preserves the level-set identity. Changing any level-set entry reserves a new
+identity.
+
+This is revision tracking, not a floating-point convergence test. Exact
+comparison is appropriate because the question is whether geometry caches may
+refer to precisely the same stored field values. Later geometry construction
+will stamp its products with this identity and its own `GeometrySnapshotId`.
 
 ## Invariants and lifetime
 
-For a fixed `SpaceEpoch`, every field-group `DoFHandler`, finite-element
-assignment, constraint matrix, local-to-global numbering, vector partitioner,
-and support envelope is immutable. A mesh adaptation, envelope rebuild, field
-schema change, or repartition creates a new `SpaceEpoch` and invalidates all
-local-index views.
+For one `SpaceEpoch`, every field-group finite-element choice, `DoFHandler`,
+constraint matrix, numbering, vector partition, and support envelope is
+immutable. Rebuilding after mesh adaptation, envelope expansion, schema
+change, or repartitioning reserves a new epoch.
 
-A shadow rebuild receives a unique provisional future `SpaceEpoch` before its
-first target object is constructed. It may be validated off to the side but is
-not the live epoch until collective commit. A rejected provisional identity is
-never reused.
+Every state snapshot is read-only and remains valid through its shared storage
+even after a later candidate is published. Every complete state bundle gets a
+unique, never-reused process-local `StateSnapshotId`; only accepted bundles
+carry `StateEpoch`. Snapshot and epoch counters use atomic allocation so
+independent stores in one process cannot accidentally reuse an identity.
 
-A `StateSnapshot` is read-only and remains valid while its owning state version
-is retained. Every trial and accepted snapshot receives a unique,
-never-reused `StateSnapshotId`. Geometry-field blocks additionally publish a
-`LevelSetFieldSetSnapshotId` that changes only when those blocks change.
-`StateEpoch` names only the accepted state revision and changes on top-level
-acceptance; promoting or rejecting a nonlinear base point leaves the live epoch
-unchanged while private snapshot ids prevent cache aliasing.
-A state change does not imply a new space. `GeometryEpoch` is separate because
-many state changes do not change cut geometry, while a level-set update does.
-
-Every phase-local real finite element lies inside its recorded support
-envelope, and every cell outside that envelope selects non-dominating
-`FE_Nothing`. The full-background level-set group never selects `FE_Nothing`.
+All state vectors have one central authority. Phase physics, interface
+operators, geometry code, and worksets may borrow views but cannot retain
+mutable ownership.
 
 ## Failure behavior
 
-Access with a mismatched phase, field group, vector partition, or epoch is a
-contract error and produces a diagnostic before an operator runs. A requested
-physics system whose state schema cannot be represented by the configured
-field groups fails during initialization.
+Draft construction reports structured diagnostics for an unknown phase, empty
+or duplicate phase-local names, zero component counts, zero polynomial degree,
+unknown support cells, and invalid level-set metadata. Regional finalization
+similarly reports empty and duplicate regional names.
 
-An interface leaving the support envelope raises a recoverable
-support-envelope-exceeded result. Allocation failure, an inconsistent
-constraint system, or inability to transfer an accepted state during mesh
-adaptation is fatal to the step and triggers rollback.
+Resolving a field through the wrong phase throws `std::invalid_argument`.
+Unknown field, regional, or snapshot indices throw `std::out_of_range` through
+checked lookup. An inactive transaction rejects further mutable access or
+sealing with `std::logic_error`. Publishing an already published snapshot and
+discarding an accepted or previous snapshot are also logic errors.
 
-## Contract tests
+An interface leaving its fixed support envelope will become a recoverable
+solve-attempt failure in the geometry stage. The coordinator may enlarge the
+envelope, reserve a new provisional `SpaceEpoch`, rebuild, and restart. It must
+not clip interface motion merely to preserve the old numbering.
 
-Tests must verify that:
+## Tests
 
-1. every configured physics type obtains exactly its declared field groups;
-2. multiple groups for one phase receive independent `DoFHandler`s;
-3. cells outside an envelope have zero phase-local degrees of freedom;
-4. non-dominating `FE_Nothing` produces the intended interface constraints;
-5. geometry motion inside an envelope preserves `SpaceEpoch` and numbering;
-6. envelope expansion and adaptive h-refinement create a new `SpaceEpoch` and
-   transfer retained state conservatively where required;
-7. all active cells use the configured uniform polynomial degree;
-8. state transactions commit and roll back without stale mutable aliases;
-9. the level-set field set remains defined over the complete background mesh;
-   and
-10. regional schema construction produces the right low-Mach rows, while an
-    unsupported layout-changing topology candidate is rejected explicitly.
+Thirty-one focused discrete-state test executables exercise the same contracts in
+both 2D and 3D. They cover:
 
-The [geometry manager](03-geometry-topology.md) consumes the full-background level
-set and envelopes, while [workset routing](05-worksets.md) turns the resulting
-spaces into short-lived local views.
+1. independent field-group handlers, canonical ordering, lookup, and phase
+   checking;
+2. support selection, non-dominating `FE_Nothing`, full-background level sets,
+   and uniform degree;
+3. new epochs on rebuild and validation of every implemented draft and
+   regional error;
+4. deterministic regional layout and native distributed-vector allocation;
+5. initial, accepted, previous, private, published, discarded, and unknown
+   snapshot behavior;
+6. transaction isolation, abandonment, inactive access, move semantics, and
+   regional values; and
+7. preservation or advancement of level-set revision identity according to
+   the actual stored values.
+
+The complete debug suite passes with AddressSanitizer and
+UndefinedBehaviorSanitizer enabled. Instrumented project code in `include/`
+and `src/` has 100% line coverage.
+
+The [geometry manager](03-geometry-topology.md) consumes the full-background
+level-set space and support envelopes. [Workset routing](05-worksets.md) will
+turn the resulting spaces and immutable snapshots into short-lived local
+views, while [regional constraints](15-regional-constraints.md) will supply
+the finalized regional schema.

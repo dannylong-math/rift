@@ -98,6 +98,7 @@ if(ENABLE_CLANG_TIDY)
 endif()
 
 add_library(rift STATIC
+    src/discrete_state.cpp
     src/phase_graph.cpp
     src/rift.cpp
 )
