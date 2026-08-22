@@ -2,6 +2,9 @@
 
 #include <boost/ut.hpp>
 #include <deal.II/base/mpi.h>
+#include <rift/discrete_state.hpp>
+
+namespace {
 
 template<int dim> void check_publication()
 {
@@ -26,9 +29,11 @@ template<int dim> void check_publication()
     expect(accepted.field(field).l2_norm() > 0.0_d);
 }
 
+} // namespace
+
 int main(int argc, char** argv)
 {
-    dealii::Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
+    dealii::Utilities::MPI::MPI_InitFinalize const mpi(argc, argv, 1);
     using namespace boost::ut;
 
     "publishing a candidate advances the accepted epoch and retains the previous state in 2D and 3D"_test = [] {

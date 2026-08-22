@@ -936,8 +936,8 @@ using PhaseGraphResult = std::expected<PhaseGraph, PhaseGraphErrors>;
  * \par Important behavior
  * Names are sorted before IDs are assigned, so insertion order does not affect
  * graph identity. The compatibility callback sees resolved phase descriptors
- * in declared minus/plus order. Construction owns its input vectors and moves
- * canonicalized values into the result.
+ * in declared minus/plus order. Construction reads the specification vectors
+ * and copies only canonicalized values into the result.
  *
  * \par Failure handling
  * All independently detectable structural and compatibility errors are
@@ -950,8 +950,8 @@ using PhaseGraphResult = std::expected<PhaseGraph, PhaseGraphErrors>;
  * \return validated graph, or all independently detectable construction errors.
  * \ingroup phase_graph
  */
-[[nodiscard]] PhaseGraphResult make_phase_graph(std::vector<PhaseSpecification> phase_specifications,
-                                                std::vector<InterfaceSpecification> interface_specifications,
-                                                InterfaceCompatibilityCheck compatibility_check = {});
+[[nodiscard]] PhaseGraphResult make_phase_graph(const std::vector<PhaseSpecification>& phase_specifications,
+                                                const std::vector<InterfaceSpecification>& interface_specifications,
+                                                const InterfaceCompatibilityCheck& compatibility_check = {});
 
 } // namespace rift

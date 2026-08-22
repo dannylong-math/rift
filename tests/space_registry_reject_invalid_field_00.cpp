@@ -2,6 +2,11 @@
 
 #include <boost/ut.hpp>
 #include <deal.II/base/mpi.h>
+#include <mpi.h>
+#include <rift/discrete_state.hpp>
+#include <utility>
+
+namespace {
 
 template<int dim> void check_invalid_fields_collected()
 {
@@ -9,13 +14,13 @@ template<int dim> void check_invalid_fields_collected()
 
     auto mesh = rift::test::make_two_cell_mesh<dim>();
     const auto graph = rift::test::make_single_phase_graph();
-    const auto gas = graph.find_phase("gas").value();
+    const auto gas = rift::test::require_optional(graph.find_phase("gas"));
     rift::SpaceSpecification specification{
-        .phase_fields = {{gas, "", 0, 0, {}}},
-        .level_set = {"level_sets", 1, 1},
+        .phase_fields = {{.phase = gas, .name = "", .components = 0, .polynomial_degree = 0, .support_envelope = {}}},
+        .level_set = {.name = "level_sets", .components = 1, .polynomial_degree = 1},
     };
 
-    rift::SpaceRegistry<dim> registry(mesh, MPI_COMM_SELF);
+    rift::SpaceRegistry<dim> const registry(mesh, MPI_COMM_SELF);
     const auto result = registry.begin_draft(graph, std::move(specification));
 
     expect(!result.has_value());
@@ -24,9 +29,11 @@ template<int dim> void check_invalid_fields_collected()
     expect(rift::test::has_space_error(result.error(), rift::SpaceBuildErrorCode::zero_polynomial_degree));
 }
 
+} // namespace
+
 int main(int argc, char** argv)
 {
-    dealii::Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
+    dealii::Utilities::MPI::MPI_InitFinalize const mpi(argc, argv, 1);
     using namespace boost::ut;
 
     "independent field-schema errors are collected in 2D and 3D"_test = [] {

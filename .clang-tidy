@@ -12,9 +12,15 @@ Checks: >
   -cppcoreguidelines-avoid-magic-numbers,
   -readability-magic-numbers,
   -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
-  -misc-non-private-member-variables-in-classes
+  -misc-non-private-member-variables-in-classes,
+  -portability-avoid-pragma-once,
+  -readability-identifier-length,
+  -cppcoreguidelines-avoid-c-arrays
 
 WarningsAsErrors: ""
-HeaderFilterRegex: "include/.*"
+HeaderFilterRegex: '(^|.*/)(include/rift|tests)/.*'
+ExcludeHeaderFilterRegex: '(^|.*/)(build|\.dependencies)/.*'
+CheckOptions:
+  bugprone-exception-escape.CheckMain: 'false'
 FormatStyle: file
 ...

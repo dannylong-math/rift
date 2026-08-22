@@ -2,6 +2,9 @@
 
 #include <boost/ut.hpp>
 #include <deal.II/base/mpi.h>
+#include <rift/discrete_state.hpp>
+
+namespace {
 
 template<int dim> void check_abandon()
 {
@@ -21,9 +24,11 @@ template<int dim> void check_abandon()
     expect(store.snapshot(rift::StateSlot::accepted).field(field).l2_norm() == 0.0_d);
 }
 
+} // namespace
+
 int main(int argc, char** argv)
 {
-    dealii::Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
+    dealii::Utilities::MPI::MPI_InitFinalize const mpi(argc, argv, 1);
     using namespace boost::ut;
 
     "abandoning a trial discards its mutable values in 2D and 3D"_test = [] {

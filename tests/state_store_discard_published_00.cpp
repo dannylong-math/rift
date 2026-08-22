@@ -2,7 +2,10 @@
 
 #include <boost/ut.hpp>
 #include <deal.II/base/mpi.h>
+#include <rift/discrete_state.hpp>
 #include <stdexcept>
+
+namespace {
 
 template<int dim> void check_older_published_state_is_protected()
 {
@@ -29,9 +32,11 @@ template<int dim> void check_older_published_state_is_protected()
     expect(store.snapshot(initial.stamp().snapshot).stamp().published_epoch.has_value());
 }
 
+} // namespace
+
 int main(int argc, char** argv)
 {
-    dealii::Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
+    dealii::Utilities::MPI::MPI_InitFinalize const mpi(argc, argv, 1);
     using namespace boost::ut;
 
     "discard preserves older published revisions in 2D and 3D"_test = [] {

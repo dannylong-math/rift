@@ -20,6 +20,7 @@
 #include <deal.II/hp/fe_collection.h>
 #include <deal.II/lac/affine_constraints.h>
 #include <deal.II/lac/la_parallel_vector.h>
+#include <exception>
 #include <expected>
 #include <map>
 #include <memory>
@@ -190,7 +191,7 @@ struct RegionalEntrySpecification {
 };
 
 /** \brief Classify a field-schema or final-layout construction failure. */
-enum class SpaceBuildErrorCode : std::uint8_t{
+enum class SpaceBuildErrorCode : std::uint8_t {
     /** A phase field names a `PhaseId` absent from the supplied graph. */
     unknown_phase,
     /** A phase-local field group has no diagnostic/configuration name. */
@@ -440,6 +441,8 @@ public:
     SpaceDraft(const SpaceDraft&) = delete;
     /** \brief Prevent assignment from duplicating finalization authority. */
     SpaceDraft& operator=(const SpaceDraft&) = delete;
+    /** \brief Release this draft's shared provisional storage. */
+    ~SpaceDraft() = default;
 
     /** \brief Return the unique provisional epoch reserved for this draft. */
     [[nodiscard]] SpaceEpoch epoch() const noexcept;
@@ -537,8 +540,8 @@ public:
     [[nodiscard]] SpaceDraftResult<dim> begin_draft(const PhaseGraph& graph, SpaceSpecification specification) const;
 
     /** \brief Add regional scalar blocks and publish a complete immutable layout. */
-    [[nodiscard]] SpaceSnapshotResult<dim> finalize(SpaceDraft<dim>&& draft,
-                                                    std::vector<RegionalEntrySpecification> regional_entries) const;
+    [[nodiscard]] SpaceSnapshotResult<dim>
+    finalize(SpaceDraft<dim> draft, std::vector<RegionalEntrySpecification> regional_specifications) const;
 
 private:
     /** \brief Shared mesh retained by all constructed space data. */
@@ -557,6 +560,8 @@ private:
  * \endcode
  * \ingroup discrete_state
  */
+// Strong IDs deliberately have no invalid default; every stamp supplies both required identities.
+// NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init) -- Complete aggregate initialization is mandatory.
 struct StateSnapshotStamp {
     /** \brief Finite-element generation required to interpret vector indices. */
     SpaceEpoch space;
@@ -624,9 +629,9 @@ class StateStore;
 class MutableStateTransaction {
 public:
     /** \brief Transfer the sole mutable authority and leave `other` inactive. */
-    MutableStateTransaction(MutableStateTransaction&&) noexcept;
+    MutableStateTransaction(MutableStateTransaction&& other) noexcept;
     /** \brief Replace this trial with `other` and leave `other` inactive. */
-    MutableStateTransaction& operator=(MutableStateTransaction&&) noexcept;
+    MutableStateTransaction& operator=(MutableStateTransaction&& other) noexcept;
     /** \brief Prevent two transactions from sharing mutable state. */
     MutableStateTransaction(const MutableStateTransaction&) = delete;
     /** \brief Prevent assignment from creating a mutable alias. */
@@ -740,6 +745,8 @@ namespace detail {
  * \tparam dim spatial dimension of the background triangulation.
  * \ingroup discrete_state
  */
+// Identity members intentionally cannot represent an uninitialized sentinel value.
+// NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init) -- Construction uses a complete designated initializer.
 template<int dim> struct FieldGroupSpaceData {
     /** \brief Shared mesh whose lifetime encloses the attached DoFHandler. */
     std::shared_ptr<dealii::Triangulation<dim>> triangulation;
@@ -791,6 +798,8 @@ template<int dim> struct FieldGroupSpaceData {
  * \tparam dim spatial dimension of every retained field space.
  * \ingroup discrete_state
  */
+// The reserved epoch intentionally has no invalid default value.
+// NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init) -- Construction uses a complete designated initializer.
 template<int dim> struct SpaceDraftData {
     /** \brief Mesh retained for the complete draft lifetime. */
     std::shared_ptr<dealii::Triangulation<dim>> triangulation;
@@ -828,6 +837,8 @@ template<int dim> struct SpaceDraftData {
  * \tparam dim spatial dimension of the finalized generation.
  * \ingroup discrete_state
  */
+// The finalized epoch intentionally has no invalid default value.
+// NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init) -- Construction uses a complete designated initializer.
 template<int dim> struct SpaceSnapshotData {
     /** \brief Mesh retained while any public space snapshot survives. */
     std::shared_ptr<dealii::Triangulation<dim>> triangulation;
@@ -879,7 +890,7 @@ inline std::uint64_t reserve_space_epoch()
  */
 inline void add_space_error(SpaceBuildErrors& errors, const SpaceBuildErrorCode code, std::string message)
 {
-    errors.push_back({.code=code, .message=std::move(message)});
+    errors.push_back({.code = code, .message = std::move(message)});
 }
 
 /**
@@ -917,6 +928,8 @@ inline void add_space_error(SpaceBuildErrors& errors, const SpaceBuildErrorCode 
  * \param full_background whether every cell must use the real element.
  * \return shared immutable implementation storage for a public space wrapper.
  */
+// The string and support envelope are ownership sinks moved into the immutable space data.
+// NOLINTBEGIN(performance-unnecessary-value-param)
 template<int dim>
 std::shared_ptr<const FieldGroupSpaceData<dim>>
 build_field_space(const std::shared_ptr<dealii::Triangulation<dim>>& triangulation, const MPI_Comm communicator,
@@ -940,27 +953,30 @@ build_field_space(const std::shared_ptr<dealii::Triangulation<dim>>& triangulati
         data->finite_elements.push_back(dealii::FE_Q<dim>(polynomial_degree));
         if (!full_background) {
             data->finite_elements.push_back(dealii::FE_Nothing<dim>(1, false));
-}
+        }
     }
     else {
         data->finite_elements.push_back(dealii::FESystem<dim>(dealii::FE_Q<dim>(polynomial_degree), components));
         if (!full_background) {
             data->finite_elements.push_back(dealii::FESystem<dim>(dealii::FE_Nothing<dim>(1, false), components));
-}
+        }
     }
 
     data->dof_handler = std::make_unique<dealii::DoFHandler<dim>>(*triangulation);
     if (!full_background) {
         for (const auto& cell : data->dof_handler->active_cell_iterators()) {
             cell->set_active_fe_index(data->support_envelope.contains(cell->id()) ? 0 : 1);
-}
-}
+        }
+    }
 
     if (full_background) {
-        data->dof_handler->distribute_dofs(data->finite_elements[0]);
-    } else {
+        // Construction always inserts the real element before reaching this full-background branch.
+        data->dof_handler->distribute_dofs(
+            data->finite_elements[0]); // NOLINT(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
+    }
+    else {
         data->dof_handler->distribute_dofs(data->finite_elements);
-}
+    }
     const auto locally_relevant = dealii::DoFTools::extract_locally_relevant_dofs(*data->dof_handler);
     data->constraints.reinit(data->dof_handler->locally_owned_dofs(), locally_relevant);
     dealii::DoFTools::make_hanging_node_constraints(*data->dof_handler, data->constraints);
@@ -968,10 +984,17 @@ build_field_space(const std::shared_ptr<dealii::Triangulation<dim>>& triangulati
     static_cast<void>(communicator);
     return data;
 }
+// NOLINTEND(performance-unnecessary-value-param)
 
 } // namespace detail
 
-template<int dim> PhaseId FieldGroupSpace<dim>::phase() const noexcept { return data_->phase.value(); }
+template<int dim> PhaseId FieldGroupSpace<dim>::phase() const noexcept
+{
+    if (!data_->phase.has_value()) {
+        std::terminate(); // GCOVR_EXCL_LINE -- Invalid field-space data terminates by contract.
+    }
+    return *data_->phase;
+}
 template<int dim> FieldGroupId FieldGroupSpace<dim>::id() const noexcept { return data_->id; }
 template<int dim> std::string_view FieldGroupSpace<dim>::name() const noexcept { return data_->name; }
 template<int dim> unsigned int FieldGroupSpace<dim>::components() const noexcept { return data_->components; }
@@ -1017,7 +1040,7 @@ template<int dim> std::span<const FieldGroupSpace<dim>> SpaceDraft<dim>::field_s
 }
 template<int dim> const LevelSetFieldSpace<dim>& SpaceDraft<dim>::level_set_space() const noexcept
 {
-    return data_->level_set_space;
+    return data_->level_set_space; // GCOVR_EXCL_LINE -- LLVM attributes this call to a duplicate COMDAT copy.
 }
 
 template<int dim> SpaceEpoch SpaceSnapshot<dim>::epoch() const noexcept { return data_->epoch; }
@@ -1036,8 +1059,8 @@ std::optional<FieldGroupId> SpaceSnapshot<dim>::find_field(const PhaseId phase,
     for (const auto& field : data_->field_spaces) {
         if (field.phase() == phase && field.name() == name) {
             return field.id();
-}
-}
+        }
+    }
     return std::nullopt;
 }
 template<int dim>
@@ -1046,7 +1069,7 @@ const FieldGroupSpace<dim>& SpaceSnapshot<dim>::field_space(const PhaseId phase,
     const auto& field = data_->field_spaces.at(group.value());
     if (field.phase() != phase) {
         throw std::invalid_argument("field group does not belong to the requested phase");
-}
+    }
     return field;
 } // GCOVR_EXCL_LINE -- Clang maps an unreachable exception-cleanup block to this closing brace.
 template<int dim> const StateLayout& SpaceSnapshot<dim>::layout() const noexcept { return data_->layout; }
@@ -1059,59 +1082,59 @@ SpaceDraftResult<dim> SpaceRegistry<dim>::begin_draft(const PhaseGraph& graph, S
     std::set<dealii::CellId> active_cells;
     for (const auto& cell : triangulation_->active_cell_iterators()) {
         active_cells.insert(cell->id());
-}
+    }
 
     std::map<std::pair<std::uint32_t, std::string>, std::size_t> occurrences;
     for (const auto& field : specification.phase_fields) {
         if (field.phase.value() >= graph.phases().size()) {
             detail::add_space_error(errors, SpaceBuildErrorCode::unknown_phase,
                                     "field group '" + field.name + "' refers to an unknown phase");
-}
+        }
         if (field.name.empty()) {
             detail::add_space_error(errors, SpaceBuildErrorCode::empty_field_name,
                                     "a phase field group has an empty name");
-}
+        }
         ++occurrences[{field.phase.value(), field.name}];
         if (field.components == 0) {
             detail::add_space_error(errors, SpaceBuildErrorCode::zero_components,
                                     "field group '" + field.name + "' has zero components");
-}
+        }
         if (field.polynomial_degree == 0) {
             detail::add_space_error(errors, SpaceBuildErrorCode::zero_polynomial_degree,
                                     "field group '" + field.name + "' has polynomial degree zero");
-}
+        }
         for (const auto& cell : field.support_envelope) {
             if (!active_cells.contains(cell)) {
                 detail::add_space_error(errors, SpaceBuildErrorCode::unknown_support_cell,
                                         "field group '" + field.name + "' contains support cell '" + cell.to_string() +
                                             "' that is not active on the background mesh");
-}
-}
+            }
+        }
     }
     for (const auto& [key, count] : occurrences) {
         if (count > 1) {
             detail::add_space_error(errors, SpaceBuildErrorCode::duplicate_field_name,
                                     "phase " + std::to_string(key.first) + " declares field group '" + key.second +
                                         "' more than once");
-}
-}
+        }
+    }
 
     if (specification.level_set.name.empty()) {
         detail::add_space_error(errors, SpaceBuildErrorCode::empty_level_set_name,
                                 "the level-set field group has an empty name");
-}
+    }
     if (specification.level_set.components == 0) {
         detail::add_space_error(errors, SpaceBuildErrorCode::zero_level_set_components,
                                 "the level-set field group has zero components");
-}
+    }
     if (specification.level_set.polynomial_degree == 0) {
         detail::add_space_error(errors, SpaceBuildErrorCode::zero_level_set_polynomial_degree,
                                 "the level-set field group has polynomial degree zero");
-}
+    }
 
     if (!errors.empty()) {
         return std::unexpected(std::move(errors));
-}
+    }
 
     std::sort(specification.phase_fields.begin(), specification.phase_fields.end(),
               [](const auto& left, const auto& right) {
@@ -1144,62 +1167,64 @@ SpaceDraftResult<dim> SpaceRegistry<dim>::begin_draft(const PhaseGraph& graph, S
 
 template<int dim>
 SpaceSnapshotResult<dim>
-SpaceRegistry<dim>::finalize(SpaceDraft<dim>&& draft,
+SpaceRegistry<dim>::finalize(SpaceDraft<dim> draft,
                              std::vector<RegionalEntrySpecification> regional_specifications) const
 {
+    auto draft_data = std::move(draft.data_);
     SpaceBuildErrors errors;
     std::map<std::string, std::size_t, std::less<>> occurrences;
     for (const auto& entry : regional_specifications) {
         if (entry.name.empty()) {
             detail::add_space_error(errors, SpaceBuildErrorCode::empty_regional_entry_name,
                                     "a regional entry has an empty name");
-}
+        }
         ++occurrences[entry.name];
     }
     for (const auto& [name, count] : occurrences) {
         if (count > 1) {
             detail::add_space_error(errors, SpaceBuildErrorCode::duplicate_regional_entry_name,
                                     "regional entry '" + name + "' is declared more than once");
-}
-}
+        }
+    }
     if (!errors.empty()) {
         return std::unexpected(std::move(errors));
-}
+    }
 
     std::sort(regional_specifications.begin(), regional_specifications.end(),
               [](const auto& left, const auto& right) { return left.name < right.name; });
 
     std::vector<StateFieldBlock> blocks;
-    blocks.reserve(draft.data_->field_spaces.size() + 1);
-    for (const auto& field : draft.data_->field_spaces) {
+    blocks.reserve(draft_data->field_spaces.size() + 1);
+    for (const auto& field : draft_data->field_spaces) {
         blocks.push_back(
             {field.id(), field.phase(), std::string(field.name()), field.dof_handler().locally_owned_dofs(), false});
-}
-    blocks.push_back({draft.data_->level_set_space.id(), std::nullopt, std::string(draft.data_->level_set_space.name()),
-                      draft.data_->level_set_space.dof_handler().locally_owned_dofs(), true});
+    }
+    blocks.push_back({draft_data->level_set_space.id(), std::nullopt, std::string(draft_data->level_set_space.name()),
+                      draft_data->level_set_space.dof_handler().locally_owned_dofs(), true});
 
     std::vector<RegionalEntry> regional_entries;
     regional_entries.reserve(regional_specifications.size());
     for (auto& specification : regional_specifications) {
         dealii::IndexSet locally_owned(1);
-        if (dealii::Utilities::MPI::this_mpi_process(draft.data_->communicator) == 0) {
+        if (dealii::Utilities::MPI::this_mpi_process(draft_data->communicator) == 0) {
             locally_owned.add_index(0);
-}
+        }
         locally_owned.compress();
-        regional_entries.push_back({.id=RegionalEntryId::from_index(static_cast<std::uint32_t>(regional_entries.size())),
-                                    .name=std::move(specification.name), .locally_owned_entries=std::move(locally_owned)});
+        regional_entries.push_back(
+            {.id = RegionalEntryId::from_index(static_cast<std::uint32_t>(regional_entries.size())),
+             .name = std::move(specification.name),
+             .locally_owned_entries = std::move(locally_owned)});
     }
 
-    StateLayout layout(draft.data_->epoch, std::move(blocks), std::move(regional_entries),
-                       draft.data_->level_set_space.id(), draft.data_->communicator);
+    StateLayout layout(draft_data->epoch, std::move(blocks), std::move(regional_entries),
+                       draft_data->level_set_space.id(), draft_data->communicator);
     auto data = std::make_shared<detail::SpaceSnapshotData<dim>>(detail::SpaceSnapshotData<dim>{
-        .triangulation = draft.data_->triangulation,
-        .epoch = draft.data_->epoch,
-        .field_spaces = draft.data_->field_spaces,
-        .level_set_space = draft.data_->level_set_space,
+        .triangulation = draft_data->triangulation,
+        .epoch = draft_data->epoch,
+        .field_spaces = draft_data->field_spaces,
+        .level_set_space = draft_data->level_set_space,
         .layout = std::move(layout),
     });
-    draft.data_.reset();
     return SpaceSnapshot<dim>(std::move(data));
 }
 

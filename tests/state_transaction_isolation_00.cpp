@@ -2,7 +2,10 @@
 
 #include <boost/ut.hpp>
 #include <deal.II/base/mpi.h>
+#include <rift/discrete_state.hpp>
 #include <stdexcept>
+
+namespace {
 
 template<int dim> void check_trial_isolation()
 {
@@ -33,9 +36,11 @@ template<int dim> void check_trial_isolation()
     expect(rejected_mutable_alias);
 }
 
+} // namespace
+
 int main(int argc, char** argv)
 {
-    dealii::Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
+    dealii::Utilities::MPI::MPI_InitFinalize const mpi(argc, argv, 1);
     using namespace boost::ut;
 
     "sealing a trial leaves its immutable base unchanged in 2D and 3D"_test = [] {

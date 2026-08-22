@@ -2,14 +2,17 @@
 
 #include <boost/ut.hpp>
 #include <deal.II/base/mpi.h>
+#include <rift/discrete_state.hpp>
 #include <stdexcept>
+
+namespace {
 
 template<int dim> void check_previous_missing()
 {
     using namespace boost::ut;
 
     const auto space = rift::test::make_space_with_one_phase_field<dim>();
-    rift::StateStore store(space.layout());
+    rift::StateStore const store(space.layout());
 
     bool rejected = false;
     try {
@@ -21,9 +24,11 @@ template<int dim> void check_previous_missing()
     expect(rejected);
 }
 
+} // namespace
+
 int main(int argc, char** argv)
 {
-    dealii::Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
+    dealii::Utilities::MPI::MPI_InitFinalize const mpi(argc, argv, 1);
     using namespace boost::ut;
 
     "a new store has no previous accepted snapshot in 2D and 3D"_test = [] {

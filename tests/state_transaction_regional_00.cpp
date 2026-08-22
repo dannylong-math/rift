@@ -2,6 +2,9 @@
 
 #include <boost/ut.hpp>
 #include <deal.II/base/mpi.h>
+#include <rift/discrete_state.hpp>
+
+namespace {
 
 template<int dim> void check_regional_state()
 {
@@ -20,9 +23,11 @@ template<int dim> void check_regional_state()
     expect(candidate.regional(pressure).l2_norm() == 8.0_d);
 }
 
+} // namespace
+
 int main(int argc, char** argv)
 {
-    dealii::Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
+    dealii::Utilities::MPI::MPI_InitFinalize const mpi(argc, argv, 1);
     using namespace boost::ut;
 
     "regional unknowns are owned and versioned with field blocks in 2D and 3D"_test = [] {

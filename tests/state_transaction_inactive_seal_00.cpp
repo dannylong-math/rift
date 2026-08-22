@@ -2,7 +2,10 @@
 
 #include <boost/ut.hpp>
 #include <deal.II/base/mpi.h>
+#include <rift/discrete_state.hpp>
 #include <stdexcept>
+
+namespace {
 
 template<int dim> void check_inactive_seal()
 {
@@ -23,9 +26,11 @@ template<int dim> void check_inactive_seal()
     expect(rejected);
 }
 
+} // namespace
+
 int main(int argc, char** argv)
 {
-    dealii::Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
+    dealii::Utilities::MPI::MPI_InitFinalize const mpi(argc, argv, 1);
     using namespace boost::ut;
 
     "sealing is rejected after a transaction becomes inactive in 2D and 3D"_test = [] {

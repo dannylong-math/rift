@@ -1,6 +1,9 @@
 #include "phase_graph_test_support.hpp"
 
 #include <boost/ut.hpp>
+#include <optional>
+#include <rift/phase_graph.hpp>
+#include <string>
 
 int main()
 {

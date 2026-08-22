@@ -2,6 +2,11 @@
 
 #include <boost/ut.hpp>
 #include <deal.II/base/mpi.h>
+#include <mpi.h>
+#include <rift/discrete_state.hpp>
+#include <utility>
+
+namespace {
 
 template<int dim> void check_invalid_level_set_collected()
 {
@@ -11,10 +16,10 @@ template<int dim> void check_invalid_level_set_collected()
     const auto graph = rift::test::make_single_phase_graph();
     rift::SpaceSpecification specification{
         .phase_fields = {},
-        .level_set = {"", 0, 0},
+        .level_set = {.name = "", .components = 0, .polynomial_degree = 0},
     };
 
-    rift::SpaceRegistry<dim> registry(mesh, MPI_COMM_SELF);
+    rift::SpaceRegistry<dim> const registry(mesh, MPI_COMM_SELF);
     const auto result = registry.begin_draft(graph, std::move(specification));
 
     expect(!result.has_value());
@@ -23,9 +28,11 @@ template<int dim> void check_invalid_level_set_collected()
     expect(rift::test::has_space_error(result.error(), rift::SpaceBuildErrorCode::zero_level_set_polynomial_degree));
 }
 
+} // namespace
+
 int main(int argc, char** argv)
 {
-    dealii::Utilities::MPI::MPI_InitFinalize mpi(argc, argv, 1);
+    dealii::Utilities::MPI::MPI_InitFinalize const mpi(argc, argv, 1);
     using namespace boost::ut;
 
     "independent level-set schema errors are collected in 2D and 3D"_test = [] {
