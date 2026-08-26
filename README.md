@@ -60,11 +60,23 @@ use the Debug library, while Release and `release-max` use the Release library.
 
 ```console
 cmake --preset debug
-cmake --build --preset debug --parallel
+cmake --build --preset debug --parallel 6
 ctest --preset debug
 ```
 
 Replace `debug` with `release`, `debug-tidy`, or `release-max` as needed.
+
+The three progressive MPI tutorials build by default as `tutorial-001`,
+`tutorial-002`, and `tutorial-003`. Run their two-rank executable smoke tests
+with:
+
+```console
+ctest --preset debug -L tutorial --output-on-failure
+```
+
+Read the corresponding pages in the generated documentation for the narrative
+walkthrough. Installing or consuming Rift from another CMake project is a
+separate installation concern and is not part of these examples.
 
 ## Documentation
 

@@ -5,9 +5,12 @@
  * \brief Stable identities, specifications, validation, and lookup for the runtime phase graph.
  */
 
+#include <cstdint>
 #include <expected>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <rift/run_configuration.hpp>
 #include <rift/strong_id.hpp>
 #include <span>
 #include <string>
@@ -171,6 +174,56 @@ using PhaseId = StrongId<detail::PhaseIdTag>;
 using InterfaceId = StrongId<detail::InterfaceIdTag>;
 
 /**
+ * \brief Identify one particular graph construction within one run.
+ *
+ * Carry this pair with graph-local IDs whenever values may cross component or
+ * storage boundaries. Equal `PhaseId` numbers do not establish compatibility;
+ * both provenance fields must also match.
+ *
+ * \code{.cpp}
+ * auto run = rift::RunConfiguration::create(MPI_COMM_WORLD).value();
+ * auto graph = rift::make_phase_graph(
+ *     run, {{"gas", "compressible"}}, {}).value();
+ * const rift::PhaseGraphProvenance source = graph.provenance();
+ * \endcode
+ *
+ * \ingroup phase_graph
+ */
+struct PhaseGraphProvenance {
+    /** \brief Run that owns this graph. */
+    RunConfigurationId run;
+    /** \brief Collective construction instance within the run. */
+    PhaseGraphInstanceId graph;
+};
+
+/**
+ * \brief Combine a graph-local phase ID with the provenance that gives it meaning.
+ *
+ * Obtain references from `PhaseGraph::reference()` before exporting a phase
+ * identity to another subsystem. A receiving graph can then call `owns()` or
+ * the checked `phase(PhaseReference)` overload to reject cross-run and
+ * cross-graph mixing.
+ *
+ * \code{.cpp}
+ * auto run = rift::RunConfiguration::create(MPI_COMM_WORLD).value();
+ * auto graph = rift::make_phase_graph(
+ *     run, {{"gas", "compressible"}}, {}).value();
+ * const auto gas_id = graph.find_phase("gas").value();
+ * const rift::PhaseReference gas = graph.reference(gas_id).value();
+ * if (graph.owns(gas))
+ *     std::cout << graph.phase(gas)->get().name << '\n';
+ * \endcode
+ *
+ * \ingroup phase_graph
+ */
+struct PhaseReference {
+    /** \brief Graph construction that owns the local phase ID. */
+    PhaseGraphProvenance graph;
+    /** \brief Phase ID interpreted only within `graph`. */
+    PhaseId phase;
+};
+
+/**
  * \brief Store a registry name while preventing keys from different registries from being mixed.
  *
  * \par When to use
@@ -267,7 +320,9 @@ using InterfaceOperatorKey = RuntimeKey<detail::InterfaceOperatorKeyTag>;
  *     {"liquid", "low-mach"},
  * };
  *
- * const auto result = rift::make_phase_graph(std::move(phases), {});
+ * const auto run =
+ *     rift::RunConfiguration::create(MPI_COMM_WORLD).value();
+ * const auto result = rift::make_phase_graph(run, phases, {});
  * if (!result) {
  *     for (const auto &error : result.error())
  *         std::cerr << error.message << '\n';
@@ -292,8 +347,10 @@ struct PhaseSpecification {
      * `make_phase_graph()`:
      *
      * \code{.cpp}
+     * const auto run =
+     *     rift::RunConfiguration::create(MPI_COMM_WORLD).value();
      * const auto result =
-     *     rift::make_phase_graph({{"gas", "compressible"}}, {});
+     *     rift::make_phase_graph(run, {{"gas", "compressible"}}, {});
      * \endcode
      *
      * \param name unique configuration name of the phase.
@@ -332,7 +389,10 @@ struct PhaseSpecification {
  *         return std::optional<std::string>{};
  *     };
  *
+ * const auto run =
+ *     rift::RunConfiguration::create(MPI_COMM_WORLD).value();
  * const auto result = rift::make_phase_graph(
+ *     run,
  *     {{"gas", "compressible"}, {"liquid", "low-mach"}},
  *     {{"surface", "liquid", "gas", "finite-rate"}},
  *     accept_pair);
@@ -410,7 +470,10 @@ struct InterfaceSpecification {
  *
  * \par Typical use
  * \code{.cpp}
- * const auto result = rift::make_phase_graph({{"gas", "compressible"}}, {});
+ * const auto run =
+ *     rift::RunConfiguration::create(MPI_COMM_WORLD).value();
+ * const auto result =
+ *     rift::make_phase_graph(run, {{"gas", "compressible"}}, {});
  * if (result) {
  *     const rift::PhaseId gas_id = result->find_phase("gas").value();
  *     const rift::PhaseDescriptor &gas = result->phase(gas_id);
@@ -454,7 +517,10 @@ struct PhaseDescriptor {
  *     [](const auto &, const auto &, const auto &) {
  *         return std::optional<std::string>{};
  *     };
+ * const auto run =
+ *     rift::RunConfiguration::create(MPI_COMM_WORLD).value();
  * const auto result = rift::make_phase_graph(
+ *     run,
  *     {{"gas", "compressible"}, {"liquid", "low-mach"}},
  *     {{"surface", "liquid", "gas", "finite-rate"}},
  *     accept_pair);
@@ -563,9 +629,44 @@ enum class PhaseGraphErrorCode : std::uint8_t {
     missing_compatibility_check,
 
     /**
+     * \brief A graph name, incident reference, or registry key is not RFC 3629 UTF-8.
+     */
+    invalid_utf8,
+
+    /**
+     * \brief Canonical graph input differs between ranks in the run communicator.
+     */
+    collective_input_mismatch,
+
+    /**
+     * \brief A compatibility result or rejection reason differs between ranks.
+     */
+    collective_compatibility_mismatch,
+
+    /**
      * \brief The compatibility callback rejected an ordered phase/operator combination.
      */
     incompatible_interface,
+
+    /**
+     * \brief Collective graph-instance identity allocation failed.
+     */
+    graph_id_allocation_failed,
+
+    /**
+     * \brief A phase reference carries an ID outside the owning graph.
+     */
+    invalid_phase_reference,
+
+    /**
+     * \brief A phase reference belongs to a different run.
+     */
+    foreign_run_reference,
+
+    /**
+     * \brief A phase reference belongs to a different graph construction in the same run.
+     */
+    foreign_graph_reference,
 };
 
 /**
@@ -577,7 +678,10 @@ enum class PhaseGraphErrorCode : std::uint8_t {
  *
  * \par Typical use
  * \code{.cpp}
+ * const auto run =
+ *     rift::RunConfiguration::create(MPI_COMM_WORLD).value();
  * const auto result = rift::make_phase_graph(
+ *     run,
  *     {{"gas", "compressible"}, {"gas", "low-mach"}}, {});
  *
  * if (!result) {
@@ -634,16 +738,36 @@ using PhaseGraphErrors = std::vector<PhaseGraphError>;
  *         return std::nullopt;
  *     };
  *
+ * const auto run =
+ *     rift::RunConfiguration::create(MPI_COMM_WORLD).value();
  * const auto result = rift::make_phase_graph(
+ *     run,
  *     {{"gas", "compressible"}, {"liquid", "low-mach"}},
  *     {{"surface", "liquid", "gas", "finite-rate"}},
  *     check);
  * \endcode
  *
  * \par Important behavior
- * The callback runs only during construction, once per structurally valid
- * interface. Returning `std::nullopt` accepts the pairing; returning a string
- * rejects it and appends that reason to a named graph diagnostic.
+ * Graph construction invokes the callback exactly once per structurally valid
+ * unique interface in bytewise interface-name order. All ranks receive the
+ * same resolved minus descriptor, plus descriptor, and specification. A
+ * returned `std::nullopt` accepts the pairing; a returned string rejects it as
+ * an ordinary configuration error. Outcomes and reasons must agree exactly on
+ * the run communicator.
+ *
+ * The callback must be deterministic and side-effect-free with respect to
+ * externally visible state. Rift may terminate construction collectively
+ * after any callback step, so applications must not use the callback to mutate
+ * registries, publish state, perform I/O, or advance an independent protocol.
+ * Derive the result only from the supplied descriptors, specification, and
+ * immutable registry data that agree across the run communicator.
+ *
+ * The callback is an exception boundary. After every invocation, ranks first
+ * agree whether any callback threw. A throwing rank then rethrows its original
+ * exception; a nonthrowing rank throws `std::runtime_error` with the
+ * deterministic message such as `compatibility callback threw on another rank
+ * for interface 'surface'`. No rank advances to another callback and no graph is
+ * produced.
  * \ingroup phase_graph
  */
 using InterfaceCompatibilityCheck = std::function<std::optional<std::string>(
@@ -671,7 +795,10 @@ using InterfaceCompatibilityCheck = std::function<std::optional<std::string>(
  *         return std::optional<std::string>{};
  *     };
  *
+ * const auto run =
+ *     rift::RunConfiguration::create(MPI_COMM_WORLD).value();
  * auto result = rift::make_phase_graph(
+ *     run,
  *     {{"gas", "compressible"}, {"liquid", "low-mach"}},
  *     {{"surface", "liquid", "gas", "finite-rate"}},
  *     accept_pair);
@@ -696,21 +823,75 @@ using InterfaceCompatibilityCheck = std::function<std::optional<std::string>(
  * \endcode
  *
  * \par Important behavior
- * Numeric identifiers are assigned by lexicographically sorting unique names,
- * so equivalent configurations receive the same IDs regardless of declaration
- * order. Interface orientation always follows the declared minus/plus order.
+ * Numeric identifiers are assigned by bytewise sorting unique UTF-8 names, so
+ * equivalent configurations receive the same IDs regardless of declaration
+ * order. No Unicode normalization, case folding, or locale ordering is
+ * applied. Interface orientation always follows the declared minus/plus order.
  * The graph owns its descriptors and is immutable after construction.
  * Geometrical occupancy may change without changing graph identities.
  *
  * \par Failure handling
  * `PhaseGraph` has no public unchecked constructor. `make_phase_graph()`
+ * collectively agrees on canonical logical input before validation and
  * returns all independently detectable configuration errors. Checked name
  * lookup returns `std::nullopt`; numeric lookup throws `std::out_of_range` for
- * an invalid ID.
+ * an invalid ID. MPI operation and collective allocation failures invoke the
+ * run's fatal MPI handler rather than returning a locally recoverable error.
  * \ingroup phase_graph
  */
 class PhaseGraph {
 public:
+    /** \brief Copy a graph while preserving provenance and independent descriptor storage. */
+    PhaseGraph(const PhaseGraph&) = default;
+
+    /** \brief Move a graph while preserving provenance and borrowed-view guarantees. */
+    PhaseGraph(PhaseGraph&&) noexcept = default;
+
+    /** \brief Release descriptor storage and the graph's shared run control. */
+    ~PhaseGraph() = default;
+
+    /** \brief Prevent in-place replacement that could invalidate borrowed descriptors. */
+    PhaseGraph& operator=(const PhaseGraph&) = delete;
+
+    /** \brief Prevent in-place replacement that could invalidate borrowed descriptors. */
+    PhaseGraph& operator=(PhaseGraph&&) = delete;
+
+    /**
+     * \brief Read the run and construction identity of this graph.
+     * \return stable provenance preserved by graph copies and moves.
+     */
+    [[nodiscard]] PhaseGraphProvenance provenance() const noexcept { return provenance_; }
+
+    /**
+     * \brief Export a checked provenance-bearing phase reference.
+     *
+     * \param id graph-local phase identity.
+     * \return reference owned by this graph, or `invalid_phase_reference`.
+     */
+    [[nodiscard]] std::expected<PhaseReference, PhaseGraphError> reference(PhaseId id) const;
+
+    /**
+     * \brief Check locally whether a reference denotes a phase in this graph.
+     *
+     * This lookup performs no MPI communication.
+     *
+     * \param reference phase identity and source provenance.
+     * \return true only when both provenance fields and the local ID match.
+     */
+    [[nodiscard]] bool owns(const PhaseReference& reference) const noexcept;
+
+    /**
+     * \brief Resolve a provenance-bearing phase reference without cross-graph mixing.
+     *
+     * Run mismatch is reported before graph mismatch, and provenance mismatch
+     * is reported before local range checking. The lookup is entirely local.
+     *
+     * \param reference phase identity and source provenance.
+     * \return borrowed descriptor wrapper, or a deterministic reference error.
+     */
+    [[nodiscard]] std::expected<std::reference_wrapper<const PhaseDescriptor>, PhaseGraphError>
+    phase(const PhaseReference& reference) const;
+
     /**
      * \brief Iterate over every configured phase in stable ID order.
      *
@@ -858,10 +1039,19 @@ private:
     /**
      * \brief Construct a graph from already validated canonical descriptors.
      *
+     * \param run_control shared run control retained by the graph.
+     * \param provenance run and graph-instance identity assigned collectively.
      * \param phases phase descriptors in ascending `PhaseId` order.
      * \param interfaces interface descriptors in ascending `InterfaceId` order.
      */
-    PhaseGraph(std::vector<PhaseDescriptor> phases, std::vector<InterfaceDescriptor> interfaces);
+    PhaseGraph(std::shared_ptr<const detail::RunConfigurationControl> run_control, PhaseGraphProvenance provenance,
+               std::vector<PhaseDescriptor> phases, std::vector<InterfaceDescriptor> interfaces);
+
+    /** \brief Retain the run communicator and identity for the graph's lifetime. */
+    std::shared_ptr<const detail::RunConfigurationControl> run_control_;
+
+    /** \brief Stable run and graph-instance provenance. */
+    PhaseGraphProvenance provenance_;
 
     /**
      * \brief Phase descriptors indexed directly by `PhaseId::value()`.
@@ -880,8 +1070,10 @@ private:
  * Inspect the result before accessing the graph:
  *
  * \code{.cpp}
+ * const auto run =
+ *     rift::RunConfiguration::create(MPI_COMM_WORLD).value();
  * rift::PhaseGraphResult result =
- *     rift::make_phase_graph({{"gas", "compressible"}}, {});
+ *     rift::make_phase_graph(run, {{"gas", "compressible"}}, {});
  * if (result)
  *     std::cout << result->canonical_json() << '\n';
  * else
@@ -916,7 +1108,10 @@ using PhaseGraphResult = std::expected<PhaseGraph, PhaseGraphErrors>;
  *             : std::optional<std::string>{"compiled pairing is unavailable"};
  *     };
  *
+ * const auto run =
+ *     rift::RunConfiguration::create(MPI_COMM_WORLD).value();
  * rift::PhaseGraphResult result = rift::make_phase_graph(
+ *     run,
  *     {{"gas", "compressible"}, {"liquid", "low-mach"}},
  *     {{"surface", "liquid", "gas", "finite-rate"}},
  *     compatibility);
@@ -944,13 +1139,15 @@ using PhaseGraphResult = std::expected<PhaseGraph, PhaseGraphErrors>;
  * returned together. A compatibility callback is optional only when
  * `interface_specifications` is empty.
  *
+ * \param run shared run identity and communicator; every rank must pass the same run collectively.
  * \param phase_specifications named phase configurations to validate and resolve.
  * \param interface_specifications oriented pairwise interfaces to validate and resolve.
  * \param compatibility_check cold-path registry callback for ordered interface compatibility.
  * \return validated graph, or all independently detectable construction errors.
  * \ingroup phase_graph
  */
-[[nodiscard]] PhaseGraphResult make_phase_graph(const std::vector<PhaseSpecification>& phase_specifications,
+[[nodiscard]] PhaseGraphResult make_phase_graph(const RunConfiguration& run,
+                                                const std::vector<PhaseSpecification>& phase_specifications,
                                                 const std::vector<InterfaceSpecification>& interface_specifications,
                                                 const InterfaceCompatibilityCheck& compatibility_check = {});
 

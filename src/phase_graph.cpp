@@ -1,18 +1,33 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <expected>
 #include <functional>
+#include <limits>
 #include <map>
+#include <memory>
 /**
  * \file
  * \brief Validation, canonicalization, lookup, and serialization implementation for `PhaseGraph`.
  */
 
+#include "phase_graph_internal.hpp"
+#include "run_configuration_internal.hpp"
+
+#include <mpi.h>
+#if __has_include(<mpi_proto.h>)
+#include <mpi_proto.h>
+#endif
+#include <new>
 #include <optional>
 #include <rift/phase_graph.hpp>
+#include <rift/run_configuration.hpp>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -25,6 +40,281 @@ namespace rift {
  * validation or serialization and should not become linkable library API.
  */
 namespace {
+
+/**
+ * \brief Carry a user's original callback exception across the internal allocation boundary.
+ *
+ * \code{.cpp}
+ * const auto compatibility_callback = [] { throw std::runtime_error{"registry failure"}; };
+ * std::exception_ptr captured;
+ * try {
+ *   compatibility_callback();
+ * } catch (...) {
+ *   captured = std::current_exception();
+ * }
+ * if (captured) {
+ *   try {
+ *     throw CompatibilityCallbackException{captured};
+ *   } catch (const CompatibilityCallbackException &failure) {
+ *     std::rethrow_exception(failure.original);
+ *   }
+ * }
+ * \endcode
+ *
+ * Internal `std::bad_alloc` is fatal after graph-input agreement, but a
+ * callback-thrown `std::bad_alloc` remains a user exception and must be
+ * rethrown unchanged. This private carrier distinguishes those origins.
+ */
+struct CompatibilityCallbackException {
+    /** \brief Original exception captured at the callback boundary. */
+    std::exception_ptr original;
+};
+
+/**
+ * \brief Invoke a run's fatal MPI handler and make non-return explicit.
+ * \param abort retained MPI-compatible fatal operation.
+ * \param communicator communicator whose collective cannot safely continue.
+ * \param status MPI status or representability failure code.
+ */
+[[noreturn]] void invoke_mpi_abort(const detail::MpiAbort abort, const MPI_Comm communicator, const int status)
+{
+    abort(communicator, status);
+    std::unreachable();
+}
+
+/**
+ * \brief Compare UTF-8 spellings by their unsigned bytes.
+ * \param left first exact spelling.
+ * \param right second exact spelling.
+ * \return true when `left` precedes `right` bytewise.
+ */
+bool bytewise_less(const std::string_view left, const std::string_view right) noexcept
+{
+    return std::ranges::lexicographical_compare(
+        left, right, {}, [](const char value) { return static_cast<unsigned char>(value); },
+        [](const char value) { return static_cast<unsigned char>(value); });
+}
+
+/**
+ * \brief Transparent bytewise ordering for owned strings and borrowed views.
+ */
+struct BytewiseLess {
+    /** \brief Enable heterogeneous map lookup. */
+    using is_transparent = void;
+
+    /**
+     * \brief Order two exact spellings without locale or Unicode normalization.
+     * \param left first spelling.
+     * \param right second spelling.
+     * \return bytewise ordering result.
+     */
+    bool operator()(const std::string_view left, const std::string_view right) const noexcept
+    {
+        return bytewise_less(left, right);
+    }
+};
+
+/**
+ * \brief Test whether one byte lies in a closed unsigned-byte range.
+ * \param value byte to test.
+ * \param lower inclusive lower bound.
+ * \param upper inclusive upper bound.
+ * \return true when `lower <= value <= upper`.
+ */
+bool in_byte_range(const unsigned char value, const unsigned char lower, const unsigned char upper) noexcept
+{
+    return value >= lower && value <= upper;
+}
+
+/** \brief Read one byte without signed-char ordering effects. */
+unsigned char utf8_byte(const std::string_view value, const std::size_t index) noexcept
+{
+    return static_cast<unsigned char>(value.at(index));
+}
+
+/** \brief Test the RFC 3629 continuation-byte range. */
+bool is_utf8_continuation(const unsigned char value) noexcept { return in_byte_range(value, 0x80U, 0xbfU); }
+
+/** \brief Validate the constrained second byte of a three-byte sequence. */
+bool valid_three_byte_second(const unsigned char first, const unsigned char second) noexcept
+{
+    if (first == 0xe0U) {
+        return in_byte_range(second, 0xa0U, 0xbfU);
+    }
+    if (first == 0xedU) {
+        return in_byte_range(second, 0x80U, 0x9fU);
+    }
+    return is_utf8_continuation(second);
+}
+
+/** \brief Validate the constrained second byte of a four-byte sequence. */
+bool valid_four_byte_second(const unsigned char first, const unsigned char second) noexcept
+{
+    if (first == 0xf0U) {
+        return in_byte_range(second, 0x90U, 0xbfU);
+    }
+    if (first == 0xf4U) {
+        return in_byte_range(second, 0x80U, 0x8fU);
+    }
+    return is_utf8_continuation(second);
+}
+
+/** \brief Return one valid scalar's encoded width, or zero for malformed input. */
+std::size_t valid_utf8_sequence_size(const std::string_view value, const std::size_t index) noexcept
+{
+    const auto remaining = value.size() - index;
+    const auto first = utf8_byte(value, index);
+    if (first <= 0x7fU) {
+        return 1;
+    }
+    if (in_byte_range(first, 0xc2U, 0xdfU)) {
+        return remaining >= 2 && is_utf8_continuation(utf8_byte(value, index + 1)) ? 2 : 0;
+    }
+    if (in_byte_range(first, 0xe0U, 0xefU)) {
+        return remaining >= 3 && valid_three_byte_second(first, utf8_byte(value, index + 1)) &&
+                       is_utf8_continuation(utf8_byte(value, index + 2))
+                   ? 3
+                   : 0;
+    }
+    if (in_byte_range(first, 0xf0U, 0xf4U)) {
+        return remaining >= 4 && valid_four_byte_second(first, utf8_byte(value, index + 1)) &&
+                       is_utf8_continuation(utf8_byte(value, index + 2)) &&
+                       is_utf8_continuation(utf8_byte(value, index + 3))
+                   ? 4
+                   : 0;
+    }
+    return 0;
+}
+
+/**
+ * \brief Validate one exact byte spelling against RFC 3629 UTF-8.
+ * \param value bytes to validate without normalization.
+ * \return true when the complete value encodes only Unicode scalar values.
+ */
+bool is_valid_utf8(const std::string_view value) noexcept
+{
+    std::size_t index = 0;
+    while (index < value.size()) {
+        const auto sequence_size = valid_utf8_sequence_size(value, index);
+        if (sequence_size == 0) {
+            return false;
+        }
+        index += sequence_size;
+    }
+    return true;
+}
+
+/**
+ * \brief Append one unsigned integer in a platform-independent fixed-width encoding.
+ * \param output byte string to extend.
+ * \param value integer to append most-significant byte first.
+ */
+void append_uint64(std::string& output, const std::uint64_t value)
+{
+    for (int shift = 56; shift >= 0; shift -= 8) {
+        output.push_back(static_cast<char>((value >> shift) & 0xffU));
+    }
+}
+
+/**
+ * \brief Append a string with an unambiguous byte length.
+ * \param output byte string to extend.
+ * \param value exact bytes to append.
+ */
+void append_length_prefixed(std::string& output, const std::string_view value)
+{
+    append_uint64(output, value.size());
+    output.append(value);
+}
+
+/**
+ * \brief Sort replicated graph input into its declaration-order-independent form.
+ * \param phases phase declarations to copy and sort by every logical field.
+ * \param interfaces interface declarations to copy and sort by every logical field.
+ * \return canonical phase and interface declaration vectors.
+ */
+std::pair<std::vector<PhaseSpecification>, std::vector<InterfaceSpecification>>
+canonicalize_input(const std::vector<PhaseSpecification>& phases, const std::vector<InterfaceSpecification>& interfaces)
+{
+    auto canonical_phases = phases;
+    std::ranges::sort(canonical_phases, [](const auto& left, const auto& right) {
+        if (left.name != right.name) {
+            return bytewise_less(left.name, right.name);
+        }
+        return bytewise_less(left.physics_key.value(), right.physics_key.value());
+    });
+
+    auto canonical_interfaces = interfaces;
+    std::ranges::sort(canonical_interfaces, [](const auto& left, const auto& right) {
+        const auto compare_field = [](const std::string_view first, const std::string_view second) {
+            if (first == second) {
+                return 0;
+            }
+            return bytewise_less(first, second) ? -1 : 1;
+        };
+        if (const int order = compare_field(left.name, right.name); order != 0) {
+            return order < 0;
+        }
+        if (const int order = compare_field(left.minus_phase, right.minus_phase); order != 0) {
+            return order < 0;
+        }
+        if (const int order = compare_field(left.plus_phase, right.plus_phase); order != 0) {
+            return order < 0;
+        }
+        return bytewise_less(left.operator_key.value(), right.operator_key.value());
+    });
+    return {std::move(canonical_phases), std::move(canonical_interfaces)};
+}
+
+/**
+ * \brief Encode every logical graph-input field for exact collective comparison.
+ * \param phases canonical phase declarations.
+ * \param interfaces canonical interface declarations.
+ * \param callback_available whether this rank supplied a compatibility callback.
+ * \return unambiguous binary encoding; it is not a persistence format.
+ */
+std::string encode_graph_input(const std::vector<PhaseSpecification>& phases,
+                               const std::vector<InterfaceSpecification>& interfaces, const bool callback_available)
+{
+    std::string output;
+    append_uint64(output, phases.size());
+    for (const auto& phase : phases) {
+        append_length_prefixed(output, phase.name);
+        append_length_prefixed(output, phase.physics_key.value());
+    }
+    append_uint64(output, interfaces.size());
+    for (const auto& material_interface : interfaces) {
+        append_length_prefixed(output, material_interface.name);
+        append_length_prefixed(output, material_interface.minus_phase);
+        append_length_prefixed(output, material_interface.plus_phase);
+        append_length_prefixed(output, material_interface.operator_key.value());
+    }
+    output.push_back(callback_available ? '\x01' : '\x00');
+    return output;
+}
+
+/**
+ * \brief Adapt MPI allreduce to the private logical-disjunction operation.
+ */
+int mpi_collective_maximum(const std::uint64_t local, std::uint64_t& chosen, const MPI_Comm communicator)
+{
+    return MPI_Allreduce(&local, &chosen, 1, MPI_UINT64_T, MPI_MAX, communicator);
+}
+
+/** \brief Gather one encoded byte count from every rank. */
+int mpi_gather_byte_counts(const std::uint64_t local_size, const std::span<std::uint64_t> lengths,
+                           const MPI_Comm communicator)
+{
+    return MPI_Allgather(&local_size, 1, MPI_UINT64_T, lengths.data(), 1, MPI_UINT64_T, communicator);
+}
+
+/** \brief Gather every rank's exact encoded graph bytes. */
+int mpi_gather_exact_bytes(const detail::ExactByteGatherRequest& request, const MPI_Comm communicator)
+{
+    return MPI_Allgatherv(request.local_bytes.data(), static_cast<int>(request.local_bytes.size()), MPI_BYTE,
+                          request.gathered_bytes.data(), request.counts.data(), request.displacements.data(), MPI_BYTE,
+                          communicator);
+}
 
 /**
  * \brief Add one correctly escaped string value to canonical JSON output.
@@ -223,11 +513,11 @@ struct ValidatedPhases {
     /** \brief Canonical descriptors whose indices equal their stable phase IDs. */
     std::vector<PhaseDescriptor> descriptors;
     /** \brief Stable phase identities indexed by validated unique names. */
-    std::map<std::string, PhaseId, std::less<>> ids;
+    std::map<std::string, PhaseId, BytewiseLess> ids;
 };
 
 /** \brief Count configuration positions for each non-empty name. */
-using NameOccurrences = std::map<std::string, std::vector<std::size_t>, std::less<>>;
+using NameOccurrences = std::map<std::string, std::vector<std::size_t>, BytewiseLess>;
 
 /**
  * \brief Validate phase declarations and build their canonical lookup.
@@ -249,11 +539,21 @@ ValidatedPhases validate_phases(const std::vector<PhaseSpecification>& specifica
     NameOccurrences occurrences;
     for (std::size_t index = 0; index < specifications.size(); ++index) {
         const auto& phase = specifications.at(index);
+        const bool valid_name_utf8 = is_valid_utf8(phase.name);
+        const bool valid_key_utf8 = is_valid_utf8(phase.physics_key.value());
+        if (!valid_name_utf8) {
+            add_error(errors, PhaseGraphErrorCode::invalid_utf8,
+                      "phase at canonical index " + std::to_string(index) + " has invalid UTF-8 in its name");
+        }
+        if (!valid_key_utf8) {
+            add_error(errors, PhaseGraphErrorCode::invalid_utf8,
+                      "phase at canonical index " + std::to_string(index) + " has invalid UTF-8 in its physics key");
+        }
         if (phase.name.empty()) {
             add_error(errors, PhaseGraphErrorCode::empty_phase_name,
-                      "phase at configuration index " + std::to_string(index) + " has an empty name");
+                      "phase at canonical index " + std::to_string(index) + " has an empty name");
         }
-        else {
+        else if (valid_name_utf8) {
             occurrences.try_emplace(phase.name).first->second.push_back(index);
         }
 
@@ -277,7 +577,7 @@ ValidatedPhases validate_phases(const std::vector<PhaseSpecification>& specifica
         }
 
         const auto& specification = specifications.at(positions.front());
-        if (specification.physics_key.value().empty()) {
+        if (specification.physics_key.value().empty() || !is_valid_utf8(specification.physics_key.value())) {
             continue;
         }
 
@@ -301,11 +601,22 @@ NameOccurrences collect_interface_occurrences(const std::vector<InterfaceSpecifi
     NameOccurrences occurrences;
     for (std::size_t index = 0; index < specifications.size(); ++index) {
         const auto& material_interface = specifications.at(index);
+        const bool valid_name_utf8 = is_valid_utf8(material_interface.name);
+        const bool valid_key_utf8 = is_valid_utf8(material_interface.operator_key.value());
+        if (!valid_name_utf8) {
+            add_error(errors, PhaseGraphErrorCode::invalid_utf8,
+                      "interface at canonical index " + std::to_string(index) + " has invalid UTF-8 in its name");
+        }
+        if (!valid_key_utf8) {
+            add_error(errors, PhaseGraphErrorCode::invalid_utf8,
+                      "interface at canonical index " + std::to_string(index) +
+                          " has invalid UTF-8 in its operator key");
+        }
         if (material_interface.name.empty()) {
             add_error(errors, PhaseGraphErrorCode::empty_interface_name,
-                      "interface at configuration index " + std::to_string(index) + " has an empty name");
+                      "interface at canonical index " + std::to_string(index) + " has an empty name");
         }
-        else {
+        else if (valid_name_utf8) {
             occurrences.try_emplace(material_interface.name).first->second.push_back(index);
         }
 
@@ -339,17 +650,35 @@ NameOccurrences collect_interface_occurrences(const std::vector<InterfaceSpecifi
  */
 void resolve_interfaces(const std::vector<InterfaceSpecification>& specifications,
                         const NameOccurrences& interface_occurrences,
-                        const std::map<std::string, PhaseId, std::less<>>& phase_ids,
+                        const std::map<std::string, PhaseId, BytewiseLess>& phase_ids,
                         std::vector<ResolvedInterface>& resolved,
                         std::map<PhasePair, std::vector<std::size_t>>& pair_occurrences, PhaseGraphErrors& errors)
 {
-    for (const auto& specification : specifications) {
-        bool valid = !specification.name.empty() && !specification.operator_key.value().empty();
-        if (!specification.name.empty() && interface_occurrences.at(specification.name).size() != 1) {
+    for (std::size_t index = 0; index < specifications.size(); ++index) {
+        const auto& specification = specifications.at(index);
+        const bool valid_name_utf8 = is_valid_utf8(specification.name);
+        const bool valid_minus_utf8 = is_valid_utf8(specification.minus_phase);
+        const bool valid_plus_utf8 = is_valid_utf8(specification.plus_phase);
+        const bool valid_key_utf8 = is_valid_utf8(specification.operator_key.value());
+        if (!valid_minus_utf8) {
+            add_error(errors, PhaseGraphErrorCode::invalid_utf8,
+                      "interface at canonical index " + std::to_string(index) +
+                          " has invalid UTF-8 in its minus-phase reference");
+        }
+        if (!valid_plus_utf8) {
+            add_error(errors, PhaseGraphErrorCode::invalid_utf8,
+                      "interface at canonical index " + std::to_string(index) +
+                          " has invalid UTF-8 in its plus-phase reference");
+        }
+
+        bool valid = !specification.name.empty() && !specification.operator_key.value().empty() && valid_name_utf8 &&
+                     valid_minus_utf8 && valid_plus_utf8 && valid_key_utf8;
+        if (valid_name_utf8 && !specification.name.empty() &&
+            interface_occurrences.at(specification.name).size() != 1) {
             valid = false;
         }
 
-        if (specification.minus_phase == specification.plus_phase) {
+        if (valid_minus_utf8 && valid_plus_utf8 && specification.minus_phase == specification.plus_phase) {
             add_error(errors, PhaseGraphErrorCode::self_interface,
                       "interface '" + specification.name + "' joins phase '" + specification.minus_phase +
                           "' to itself");
@@ -357,7 +686,7 @@ void resolve_interfaces(const std::vector<InterfaceSpecification>& specification
         }
 
         const auto minus = phase_ids.find(specification.minus_phase);
-        if (minus == phase_ids.end()) {
+        if (valid_minus_utf8 && minus == phase_ids.end()) {
             add_error(errors, PhaseGraphErrorCode::missing_incident_phase,
                       "interface '" + specification.name + "' refers to missing or non-unique minus phase '" +
                           specification.minus_phase + "'");
@@ -365,7 +694,7 @@ void resolve_interfaces(const std::vector<InterfaceSpecification>& specification
         }
 
         const auto plus = phase_ids.find(specification.plus_phase);
-        if (plus == phase_ids.end()) {
+        if (valid_plus_utf8 && plus == phase_ids.end()) {
             add_error(errors, PhaseGraphErrorCode::missing_incident_phase,
                       "interface '" + specification.name + "' refers to missing or non-unique plus phase '" +
                           specification.plus_phase + "'");
@@ -426,12 +755,18 @@ void mark_duplicate_phase_pairs(std::vector<ResolvedInterface>& resolved,
  * \param resolved structurally resolved interfaces.
  * \param phases canonical descriptors indexed by `PhaseId`.
  * \param compatibility_check callback supplied by the configured registries.
+ * \param interfaces_supplied whether configuration contained any interface declaration.
+ * \param communicator run communicator used to synchronize each callback step.
+ * \param operations exact agreement, exception agreement, and fatal MPI operations.
+ * \param rejection_recorder diagnostic operation executed after an agreed rejection.
  * \param errors collection receiving callback or missing-callback failures.
  */
 void validate_compatibility(const std::vector<ResolvedInterface>& resolved, const std::vector<PhaseDescriptor>& phases,
-                            const InterfaceCompatibilityCheck& compatibility_check, PhaseGraphErrors& errors)
+                            const InterfaceCompatibilityCheck& compatibility_check, const bool interfaces_supplied,
+                            const MPI_Comm communicator, const detail::PhaseGraphCollectiveOperations& operations,
+                            const detail::CompatibilityRejectionRecorder rejection_recorder, PhaseGraphErrors& errors)
 {
-    if (!resolved.empty() && !compatibility_check) {
+    if (interfaces_supplied && !compatibility_check) {
         add_error(errors, PhaseGraphErrorCode::missing_compatibility_check,
                   "a compatibility check is required when the phase graph contains interfaces");
         return;
@@ -448,10 +783,34 @@ void validate_compatibility(const std::vector<ResolvedInterface>& resolved, cons
 
         const auto& minus = phases.at(material_interface.minus_phase.value());
         const auto& plus = phases.at(material_interface.plus_phase.value());
-        if (auto reason = compatibility_check(minus, plus, *material_interface.specification)) {
-            add_error(errors, PhaseGraphErrorCode::incompatible_interface,
-                      "interface '" + material_interface.specification->name + "' is incompatible with minus phase '" +
-                          minus.name + "' and plus phase '" + plus.name + "': " + *reason);
+        std::optional<std::string> reason;
+        std::exception_ptr exception;
+        try {
+            reason = compatibility_check(minus, plus, *material_interface.specification);
+        }
+        catch (...) {
+            exception = std::current_exception();
+        }
+
+        if (detail::collective_any(communicator, exception != nullptr, operations)) {
+            if (exception != nullptr) {
+                throw CompatibilityCallbackException{.original = exception};
+            }
+            throw std::runtime_error("compatibility callback threw on another rank for interface '" +
+                                     material_interface.specification->name + "'");
+        }
+
+        const std::string_view outcome = reason ? std::string_view{"rejected"} : std::string_view{"accepted"};
+        if (!detail::collectively_equal_bytes(communicator, outcome, operations) ||
+            (reason && !detail::collectively_equal_bytes(communicator, *reason, operations))) {
+            add_error(errors, PhaseGraphErrorCode::collective_compatibility_mismatch,
+                      "compatibility callback result differs across the run communicator for interface '" +
+                          material_interface.specification->name + "'");
+            return;
+        }
+
+        if (reason) {
+            rejection_recorder(errors, *material_interface.specification, minus, plus, *reason);
         }
     }
 }
@@ -465,7 +824,7 @@ void validate_compatibility(const std::vector<ResolvedInterface>& resolved, cons
 std::vector<InterfaceDescriptor> make_interface_descriptors(std::vector<ResolvedInterface>& resolved)
 {
     std::ranges::sort(resolved, [](const auto& left, const auto& right) {
-        return left.specification->name < right.specification->name;
+        return bytewise_less(left.specification->name, right.specification->name);
     });
 
     std::vector<InterfaceDescriptor> interfaces;
@@ -485,6 +844,116 @@ std::vector<InterfaceDescriptor> make_interface_descriptors(std::vector<Resolved
 
 namespace detail {
 
+bool collectively_equal_bytes(const MPI_Comm communicator, const std::string_view local_bytes,
+                              const PhaseGraphCollectiveOperations& operations)
+{
+    int communicator_size = 0;
+    int status = operations.communicator_size(communicator, &communicator_size);
+    if (status != MPI_SUCCESS) {
+        invoke_mpi_abort(operations.abort, communicator, status);
+    }
+    if (communicator_size <= 0 || local_bytes.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        invoke_mpi_abort(operations.abort, communicator, MPI_ERR_COUNT);
+    }
+
+    std::vector<std::uint64_t> lengths;
+    std::vector<int> counts;
+    std::vector<int> displacements;
+    try {
+        lengths = operations.allocate_uint64_buffer(static_cast<std::size_t>(communicator_size));
+        counts = operations.allocate_int_buffer(static_cast<std::size_t>(communicator_size));
+        displacements = operations.allocate_int_buffer(static_cast<std::size_t>(communicator_size));
+    }
+    catch (const std::bad_alloc&) {
+        invoke_mpi_abort(operations.abort, communicator, MPI_ERR_NO_MEM);
+    }
+
+    const std::uint64_t local_size = local_bytes.size();
+    status = operations.gather_byte_counts(local_size, lengths, communicator);
+    if (status != MPI_SUCCESS) {
+        invoke_mpi_abort(operations.abort, communicator, status);
+    }
+
+    std::uint64_t total_size = 0;
+    for (std::size_t rank = 0; rank < lengths.size(); ++rank) {
+        if (lengths.at(rank) > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) ||
+            total_size > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) - lengths.at(rank)) {
+            invoke_mpi_abort(operations.abort, communicator, MPI_ERR_COUNT);
+        }
+        counts.at(rank) = static_cast<int>(lengths.at(rank));
+        displacements.at(rank) = static_cast<int>(total_size);
+        total_size += lengths.at(rank);
+    }
+
+    std::string gathered;
+    try {
+        gathered = operations.allocate_byte_buffer(static_cast<std::size_t>(total_size));
+    }
+    catch (const std::bad_alloc&) {
+        invoke_mpi_abort(operations.abort, communicator, MPI_ERR_NO_MEM);
+    }
+    status = operations.gather_exact_bytes({.local_bytes = local_bytes,
+                                            .counts = counts,
+                                            .displacements = displacements,
+                                            .gathered_bytes = std::span{gathered}},
+                                           communicator);
+    if (status != MPI_SUCCESS) {
+        invoke_mpi_abort(operations.abort, communicator, status);
+    }
+
+    for (std::size_t rank = 0; rank < lengths.size(); ++rank) {
+        const auto start = static_cast<std::size_t>(displacements.at(rank));
+        const auto count = static_cast<std::size_t>(counts.at(rank));
+        if (std::string_view(gathered).substr(start, count) != local_bytes) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool collective_any(const MPI_Comm communicator, const bool local_condition,
+                    const PhaseGraphCollectiveOperations& operations)
+{
+    const std::uint64_t local = local_condition ? 1U : 0U;
+    std::uint64_t any = 0;
+    const int status = operations.collective_maximum(local, any, communicator);
+    if (status != MPI_SUCCESS) {
+        invoke_mpi_abort(operations.abort, communicator, status);
+    }
+    return any != 0;
+}
+
+std::vector<std::uint64_t> allocate_uint64_buffer(const std::size_t size) { return std::vector<std::uint64_t>(size); }
+
+std::vector<int> allocate_int_buffer(const std::size_t size) { return std::vector<int>(size); }
+
+std::string allocate_byte_buffer(const std::size_t size)
+{
+    std::string buffer;
+    buffer.resize(size);
+    return buffer;
+}
+
+CanonicalPhaseGraphInput allocate_canonical_phase_graph_input(const std::vector<PhaseSpecification>& phases,
+                                                              const std::vector<InterfaceSpecification>& interfaces,
+                                                              const bool callback_available)
+{
+    auto [canonical_phases, canonical_interfaces] = canonicalize_input(phases, interfaces);
+    auto encoded = encode_graph_input(canonical_phases, canonical_interfaces, callback_available);
+    return {.phases = std::move(canonical_phases),
+            .interfaces = std::move(canonical_interfaces),
+            .encoded = std::move(encoded)};
+}
+
+void record_compatibility_rejection(PhaseGraphErrors& errors, const InterfaceSpecification& interface_specification,
+                                    const PhaseDescriptor& minus, const PhaseDescriptor& plus,
+                                    const std::string_view reason)
+{
+    add_error(errors, PhaseGraphErrorCode::incompatible_interface,
+              "interface '" + interface_specification.name + "' is incompatible with minus phase '" + minus.name +
+                  "' and plus phase '" + plus.name + "': " + std::string(reason));
+}
+
 /**
  * \brief Complete validated graph construction without exposing the constructor publicly.
  *
@@ -503,7 +972,7 @@ namespace detail {
  * std::vector<InterfaceDescriptor> interfaces;
  *
  * PhaseGraph graph = PhaseGraphFactory::create(
- *     std::move(phases), std::move(interfaces));
+ *     run_control, provenance, std::move(phases), std::move(interfaces));
  * \endcode
  *
  * \par Important behavior
@@ -520,26 +989,71 @@ struct PhaseGraphFactory {
      *
      * \code{.cpp}
      * return detail::PhaseGraphFactory::create(
+     *     run_control, provenance,
      *     std::move(phases), std::move(interfaces));
      * \endcode
      *
      * No copies or additional validation are performed.
      *
+     * \param run_control shared control retained for the graph lifetime.
+     * \param provenance run and graph-instance identity assigned collectively.
      * \param phases phase descriptors indexed by `PhaseId`.
      * \param interfaces interface descriptors indexed by `InterfaceId`.
      * \return immutable runtime phase graph.
      */
-    static PhaseGraph create(std::vector<PhaseDescriptor> phases, std::vector<InterfaceDescriptor> interfaces)
+    static PhaseGraph create(std::shared_ptr<const RunConfigurationControl> run_control,
+                             const PhaseGraphProvenance provenance, std::vector<PhaseDescriptor> phases,
+                             std::vector<InterfaceDescriptor> interfaces)
     {
-        return {std::move(phases), std::move(interfaces)};
-    } // GCOVR_EXCL_LINE -- Clang assigns only an unreachable vector-move cleanup block to this brace.
+        return {std::move(run_control), provenance, std::move(phases), std::move(interfaces)};
+    }
 };
 
 } // namespace detail
 
-PhaseGraph::PhaseGraph(std::vector<PhaseDescriptor> phases, std::vector<InterfaceDescriptor> interfaces) :
-    phases_(std::move(phases)), interfaces_(std::move(interfaces))
+PhaseGraph::PhaseGraph(std::shared_ptr<const detail::RunConfigurationControl> run_control,
+                       const PhaseGraphProvenance provenance, std::vector<PhaseDescriptor> phases,
+                       std::vector<InterfaceDescriptor> interfaces) :
+    run_control_(std::move(run_control)),
+    provenance_(provenance),
+    phases_(std::move(phases)),
+    interfaces_(std::move(interfaces))
 {
+}
+
+std::expected<PhaseReference, PhaseGraphError> PhaseGraph::reference(const PhaseId id) const
+{
+    if (!std::cmp_less(id.value(), phases_.size())) {
+        return std::unexpected(PhaseGraphError{.code = PhaseGraphErrorCode::invalid_phase_reference,
+                                               .message = "phase ID " + std::to_string(id.value()) +
+                                                          " is not present in this phase graph"});
+    }
+    return PhaseReference{.graph = provenance_, .phase = id};
+}
+
+bool PhaseGraph::owns(const PhaseReference& reference) const noexcept
+{
+    return reference.graph.run == provenance_.run && reference.graph.graph == provenance_.graph &&
+           std::cmp_less(reference.phase.value(), phases_.size());
+}
+
+std::expected<std::reference_wrapper<const PhaseDescriptor>, PhaseGraphError>
+PhaseGraph::phase(const PhaseReference& reference) const
+{
+    if (reference.graph.run != provenance_.run) {
+        return std::unexpected(PhaseGraphError{.code = PhaseGraphErrorCode::foreign_run_reference,
+                                               .message = "phase reference belongs to a different run configuration"});
+    }
+    if (reference.graph.graph != provenance_.graph) {
+        return std::unexpected(PhaseGraphError{.code = PhaseGraphErrorCode::foreign_graph_reference,
+                                               .message = "phase reference belongs to a different phase graph"});
+    }
+    if (!std::cmp_less(reference.phase.value(), phases_.size())) {
+        return std::unexpected(PhaseGraphError{.code = PhaseGraphErrorCode::invalid_phase_reference,
+                                               .message = "phase ID " + std::to_string(reference.phase.value()) +
+                                                          " is not present in this phase graph"});
+    }
+    return std::cref(phases_.at(reference.phase.value()));
 }
 
 const PhaseDescriptor& PhaseGraph::phase(const PhaseId id) const { return phases_.at(id.value()); }
@@ -551,7 +1065,7 @@ const InterfaceDescriptor& PhaseGraph::material_interface(const InterfaceId id) 
 
 std::optional<PhaseId> PhaseGraph::find_phase(const std::string_view name) const noexcept
 {
-    const auto found = std::ranges::lower_bound(phases_, name, std::less<>{}, &PhaseDescriptor::name);
+    const auto found = std::ranges::lower_bound(phases_, name, BytewiseLess{}, &PhaseDescriptor::name);
     if (found == phases_.end() || found->name != name) {
         return std::nullopt;
     }
@@ -561,7 +1075,7 @@ std::optional<PhaseId> PhaseGraph::find_phase(const std::string_view name) const
 
 std::optional<InterfaceId> PhaseGraph::find_interface(const std::string_view name) const noexcept
 {
-    const auto found = std::ranges::lower_bound(interfaces_, name, std::less<>{}, &InterfaceDescriptor::name);
+    const auto found = std::ranges::lower_bound(interfaces_, name, BytewiseLess{}, &InterfaceDescriptor::name);
     if (found == interfaces_.end() || found->name != name) {
         return std::nullopt;
     }
@@ -620,26 +1134,79 @@ std::string PhaseGraph::canonical_json() const
     return output;
 }
 
-PhaseGraphResult make_phase_graph(const std::vector<PhaseSpecification>& phase_specifications,
+PhaseGraphResult detail::make_phase_graph_with_input_allocator(
+    const RunConfiguration& run, const std::vector<PhaseSpecification>& phase_specifications,
+    const std::vector<InterfaceSpecification>& interface_specifications,
+    const InterfaceCompatibilityCheck& compatibility_check, const CanonicalPhaseGraphInputAllocator input_allocator,
+    const CompatibilityRejectionRecorder rejection_recorder)
+{
+    auto run_control = detail::RunConfigurationAccess::control(run);
+    const MPI_Comm communicator = run_control->communicator();
+    const detail::PhaseGraphCollectiveOperations operations{.communicator_size = MPI_Comm_size,
+                                                            .gather_byte_counts = mpi_gather_byte_counts,
+                                                            .gather_exact_bytes = mpi_gather_exact_bytes,
+                                                            .allocate_uint64_buffer = detail::allocate_uint64_buffer,
+                                                            .allocate_int_buffer = detail::allocate_int_buffer,
+                                                            .allocate_byte_buffer = detail::allocate_byte_buffer,
+                                                            .collective_maximum = mpi_collective_maximum,
+                                                            .abort = run_control->abort_handler()};
+    auto graph_id = run_control->reserve_graph_id();
+    if (!graph_id) {
+        return std::unexpected(PhaseGraphErrors{PhaseGraphError{.code = PhaseGraphErrorCode::graph_id_allocation_failed,
+                                                                .message = std::move(graph_id).error().message}});
+    }
+
+    CanonicalPhaseGraphInput canonical_input;
+    try {
+        canonical_input = input_allocator(phase_specifications, interface_specifications, bool{compatibility_check});
+    }
+    catch (const std::bad_alloc&) {
+        invoke_mpi_abort(operations.abort, communicator, MPI_ERR_NO_MEM);
+    }
+    if (!detail::collectively_equal_bytes(communicator, canonical_input.encoded, operations)) {
+        return std::unexpected(
+            PhaseGraphErrors{PhaseGraphError{.code = PhaseGraphErrorCode::collective_input_mismatch,
+                                             .message = "phase graph input differs across the run communicator"}});
+    }
+
+    try {
+        PhaseGraphErrors errors;
+        auto validated_phases = validate_phases(canonical_input.phases, errors);
+        const auto interface_occurrences = collect_interface_occurrences(canonical_input.interfaces, errors);
+        std::vector<ResolvedInterface> resolved_interfaces;
+        std::map<PhasePair, std::vector<std::size_t>> pair_occurrences;
+        resolve_interfaces(canonical_input.interfaces, interface_occurrences, validated_phases.ids, resolved_interfaces,
+                           pair_occurrences, errors);
+        mark_duplicate_phase_pairs(resolved_interfaces, pair_occurrences, errors);
+        validate_compatibility(resolved_interfaces, validated_phases.descriptors, compatibility_check,
+                               !canonical_input.interfaces.empty(), communicator, operations, rejection_recorder,
+                               errors);
+
+        if (!errors.empty()) {
+            return std::unexpected(std::move(errors));
+        }
+
+        auto interfaces = make_interface_descriptors(resolved_interfaces);
+        const PhaseGraphProvenance provenance{.run = run.id(), .graph = PhaseGraphInstanceId::from_index(*graph_id)};
+        return detail::PhaseGraphFactory::create(std::move(run_control), provenance,
+                                                 std::move(validated_phases.descriptors), std::move(interfaces));
+    }
+    catch (const CompatibilityCallbackException& failure) {
+        std::rethrow_exception(failure.original);
+    }
+    catch (const std::bad_alloc&) {
+        invoke_mpi_abort(operations.abort, communicator, MPI_ERR_NO_MEM);
+    }
+}
+
+PhaseGraphResult make_phase_graph(const RunConfiguration& run,
+                                  const std::vector<PhaseSpecification>& phase_specifications,
                                   const std::vector<InterfaceSpecification>& interface_specifications,
                                   const InterfaceCompatibilityCheck& compatibility_check)
 {
-    PhaseGraphErrors errors;
-    auto validated_phases = validate_phases(phase_specifications, errors);
-    const auto interface_occurrences = collect_interface_occurrences(interface_specifications, errors);
-    std::vector<ResolvedInterface> resolved_interfaces;
-    std::map<PhasePair, std::vector<std::size_t>> pair_occurrences;
-    resolve_interfaces(interface_specifications, interface_occurrences, validated_phases.ids, resolved_interfaces,
-                       pair_occurrences, errors);
-    mark_duplicate_phase_pairs(resolved_interfaces, pair_occurrences, errors);
-    validate_compatibility(resolved_interfaces, validated_phases.descriptors, compatibility_check, errors);
-
-    if (!errors.empty()) {
-        return std::unexpected(std::move(errors));
-    }
-
-    auto interfaces = make_interface_descriptors(resolved_interfaces);
-    return detail::PhaseGraphFactory::create(std::move(validated_phases.descriptors), std::move(interfaces));
+    return detail::make_phase_graph_with_input_allocator(run, phase_specifications, interface_specifications,
+                                                         compatibility_check,
+                                                         detail::allocate_canonical_phase_graph_input);
 }
 
 } // namespace rift
