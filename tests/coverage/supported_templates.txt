@@ -1,0 +1,19 @@
+# Public template surfaces supported for dimensions 2 and 3.
+rift::FieldGroupSpace<2>
+rift::FieldGroupSpace<3>
+rift::LevelSetFieldSpace<2>
+rift::LevelSetFieldSpace<3>
+rift::MeshSnapshot<2>
+rift::MeshSnapshot<3>
+rift::SpaceDraft<2>
+rift::SpaceDraft<3>
+rift::SpaceDraftResult<2>
+rift::SpaceDraftResult<3>
+rift::SpaceRegistry<2>
+rift::SpaceRegistry<3>
+rift::SpaceSnapshot<2>
+rift::SpaceSnapshot<3>
+rift::SpaceSnapshotResult<2>
+rift::SpaceSnapshotResult<3>
+rift::make_mesh_snapshot<2>
+rift::make_mesh_snapshot<3>

@@ -1,4 +1,5 @@
 import { defineConfig, doxygen, markdown } from "sourcey";
+import { withTutorialSnippets } from "./scripts/tutorial-snippets.mjs";
 
 export default defineConfig({
   name: "Rift",
@@ -24,11 +25,20 @@ export default defineConfig({
       {
         tab: "Guides",
         slug: "",
-        source: markdown({
+        source: withTutorialSnippets(markdown({
           groups: [
             {
               group: "Getting Started",
-              pages: ["introduction", "contributing", "theory/index"],
+              pages: [
+                "introduction",
+                "tutorials/tutorial-001",
+                "tutorials/tutorial-002",
+                "tutorials/tutorial-003",
+                "spaces-and-support",
+                "collective-state",
+                "contributing",
+                "theory/index",
+              ],
             },
             {
               group: "Architecture foundations",
@@ -81,7 +91,7 @@ export default defineConfig({
               ],
             },
           ],
-        }),
+        })),
       },
       {
         tab: "C++ API",
