@@ -1,8 +1,0 @@
-file	line	count	function
-include/rift/discrete_state.hpp	2581	0	void rift::detail::verify_synchronized_active_fe_index<rift_test::space_registry_fatal_00::register_tests()::'lambda'()::operator()() const::'lambda1'()>(std::shared_ptr<rift::detail::RunConfigurationControl const> const&, bool, unsigned int, rift_test::space_registry_fatal_00::register_tests()::'lambda'()::operator()() const::'lambda1'()&&)::'lambda'()::operator()() const
-include/rift/mesh_snapshot.hpp	116	0	rift::MeshSnapshotError::MeshSnapshotError(rift::MeshSnapshotError const&)
-src/discrete_state.cpp	1159	0	rift::detail::StateStoreAccess::begin_trial(rift::StateStore&, rift::StrongId<rift::detail::StateSnapshotIdTag, unsigned long>, void (*)())
-src/discrete_state.cpp	1164	0	rift::detail::StateStoreAccess::seal(rift::MutableStateTransaction&, void (*)())
-src/discrete_state.cpp	1171	0	rift::detail::StateStoreAccess::seal_with_regional_broadcast(rift::MutableStateTransaction&, int (*)(void*, int, int, int, int))
-src/discrete_state.cpp	1178	0	rift::detail::StateStoreAccess::seal_with_regional_staging(rift::MutableStateTransaction&, std::vector<unsigned long, std::allocator<unsigned long>> (*)(unsigned long))
-src/discrete_state.cpp	1185	0	rift::detail::StateStoreAccess::publish(rift::StateStore&, rift::StrongId<rift::detail::StateSnapshotIdTag, unsigned long>, void (*)())
