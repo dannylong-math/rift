@@ -1,22 +1,19 @@
 # Rift
 
-Rift is a C++23 research code for sharp-interface multiphase flow. It uses
+Rift is a C++23 research library for sharp-interface multiphase flow. It uses
 [deal.II 9.8.0](https://github.com/dealii/dealii/releases/tag/v9.8.0), MPI, and
 p4est.
 
+This branch is a clean-slate re-foundation. The library currently provides only
+its semantic version API; scientific components will be reintroduced through
+reviewed, collaborative feature work.
+
 ## Prerequisites
 
-The setup is intended for Ubuntu and performs no system-wide installation. The
-host must already provide:
-
-- a C++23 compiler, CMake 3.21 or newer, GNU Make, curl, tar, and `sha256sum`;
-- an MPI installation with C and C++ compiler wrappers; and
-- Doxygen and Node.js 22.12 or newer for documentation.
-
-On Ubuntu these are normally supplied by packages such as `build-essential`,
-`cmake`, `curl`, `doxygen`, and either `libopenmpi-dev` or `libmpich-dev`.
-Install Node.js 24 through a version manager rather than Ubuntu's potentially
-older `nodejs` package. The Rift installer never invokes `apt` or `sudo`.
+The setup targets Ubuntu and performs no system-wide installation. The host
+must provide a C++23 compiler, CMake 3.21 or newer, GNU Make, curl, tar,
+`sha256sum`, and an MPI installation with C and C++ compiler wrappers. Doxygen
+and Node.js 22.12 or newer are needed for documentation.
 
 ## Local dependencies
 
@@ -26,17 +23,10 @@ Run:
 ./scripts/install_dependencies.sh
 ```
 
-The script detects an installed MPI implementation and builds the following
-under `.dependencies/`:
-
-- zlib 1.3.1;
-- p4est 2.8.7 in Debug and Release configurations;
-- deal.II 9.8.0 in Debug and Release configurations; and
-- the pinned Sourcey packages used to build the documentation.
-
-Downloads are version-pinned and checksum-verified. Existing successful
-installations are reused. The full deal.II build requires several gigabytes of
-disk space and can take a substantial amount of time. Useful alternatives are:
+The script installs version-pinned zlib, p4est, deal.II, and documentation
+dependencies under `.dependencies/`. Existing successful installations are
+reused. The deal.II build can take a substantial amount of time and disk space.
+Useful alternatives are:
 
 ```console
 ./scripts/install_dependencies.sh --check
@@ -46,41 +36,32 @@ disk space and can take a substantial amount of time. Useful alternatives are:
 ./scripts/install_dependencies.sh --prefix /path/to/rift-dependencies
 ```
 
-The CMake presets use `.dependencies` by default. If `--prefix` is used, pass
-the same root when configuring, for example:
-
-```console
-cmake --preset debug -DRIFT_DEPENDENCIES_DIR=/path/to/rift-dependencies
-```
+When using a different prefix, pass the same root to CMake with
+`-DRIFT_DEPENDENCIES_DIR=/path/to/rift-dependencies`.
 
 ## Build and test
-
-CMake automatically selects the matching deal.II installation: Debug presets
-use the Debug library, while Release and `release-max` use the Release library.
 
 ```console
 cmake --preset debug
 cmake --build --preset debug --parallel 6
-ctest --preset debug
+ctest --preset debug --output-on-failure
 ```
 
-Replace `debug` with `release`, `debug-tidy`, or `release-max` as needed.
+The debug preset enables AddressSanitizer and UndefinedBehaviorSanitizer.
+`release`, `debug-tidy`, and `release-max` presets are also available.
 
-The three progressive MPI tutorials build by default as `tutorial-001`,
-`tutorial-002`, and `tutorial-003`. Run their two-rank executable smoke tests
-with:
+Each `tests/*.cpp` file is automatically built as one same-named CTest using
+Boost.UT. MPI tests are intentionally deferred until their simpler replacement
+is designed.
 
-```console
-ctest --preset debug -L tutorial --output-on-failure
-```
+## Continuous integration and coverage
 
-Read the corresponding pages in the generated documentation for the narrative
-walkthrough. Installing or consuming Rift from another CMake project is a
-separate installation concern and is not part of these examples.
+Pull requests run the unit tests with GCC and Clang. A GCC coverage build uses
+gcovr to produce a Cobertura report and uploads it to Codecov. A nightly smoke
+workflow restores both compiler-specific deal.II caches and rebuilds them only
+if GitHub no longer has them.
 
 ## Documentation
-
-Generate Doxygen XML and build the Sourcey site with:
 
 ```console
 cmake -E make_directory build/doxygen
@@ -89,10 +70,5 @@ npm ci --prefix docs
 npm run --prefix docs build
 ```
 
-Open `docs/dist/index.html`. Sourcey builds the narrative guides from Markdown
-and the C++ API reference from the Doxygen XML generated from public headers.
-GitHub Actions builds the site on pull requests and deploys it to GitHub Pages
-after pushes to `main`.
-
-The generated [contributor guide](docs/contributing.md) records the focused
-unit-test naming and layout conventions used by the project.
+Open `docs/dist/index.html` after the build. GitHub Actions builds the site on
+pull requests and deploys it after pushes to `main`.

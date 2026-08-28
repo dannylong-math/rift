@@ -91,29 +91,6 @@ if(ENABLE_COVERAGE)
     endif()
 endif()
 
-add_library(rift_llvm_coverage INTERFACE)
-option(ENABLE_LLVM_COVERAGE "Instrument tests with Clang source-based coverage" OFF)
-if(ENABLE_LLVM_COVERAGE)
-    if(ENABLE_COVERAGE)
-        message(FATAL_ERROR
-            "ENABLE_COVERAGE and ENABLE_LLVM_COVERAGE are separate coverage modes; enable only one"
-        )
-    endif()
-    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        message(FATAL_ERROR "ENABLE_LLVM_COVERAGE requires Clang")
-    endif()
-    target_compile_options(rift_llvm_coverage INTERFACE
-        -fprofile-instr-generate
-        -fcoverage-mapping
-        -O0
-        -g
-    )
-    target_link_options(rift_llvm_coverage INTERFACE
-        -fprofile-instr-generate
-        -fcoverage-mapping
-    )
-endif()
-
 option(ENABLE_CLANG_TIDY "Run clang-tidy during compilation" OFF)
 if(ENABLE_CLANG_TIDY)
     find_program(CLANG_TIDY_EXE NAMES clang-tidy REQUIRED)
@@ -121,11 +98,7 @@ if(ENABLE_CLANG_TIDY)
 endif()
 
 add_library(rift STATIC
-    src/discrete_state.cpp
-    src/mesh_snapshot.cpp
-    src/phase_graph.cpp
     src/rift.cpp
-    src/run_configuration.cpp
 )
 add_library(rift::rift ALIAS rift)
 
@@ -138,7 +111,6 @@ target_link_libraries(rift
     rift_warnings
     rift_sanitizers
     rift_coverage
-    rift_llvm_coverage
 )
 deal_ii_setup_target(rift)
 
@@ -146,9 +118,4 @@ option(BUILD_TESTING "Build tests" ON)
 if(BUILD_TESTING)
     enable_testing()
     add_subdirectory(tests)
-endif()
-
-option(BUILD_TUTORIALS "Build Rift's executable tutorials" ON)
-if(BUILD_TUTORIALS)
-    add_subdirectory(tutorials)
 endif()

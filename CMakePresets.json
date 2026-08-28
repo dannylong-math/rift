@@ -34,18 +34,6 @@
       }
     },
     {
-      "name": "coverage-clang",
-      "displayName": "Clang source-based coverage",
-      "inherits": "base",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CXX_COMPILER": "/usr/bin/clang++",
-        "ENABLE_COVERAGE": "OFF",
-        "ENABLE_LLVM_COVERAGE": "ON",
-        "ENABLE_SANITIZERS": "OFF"
-      }
-    },
-    {
       "name": "release-max",
       "displayName": "Release (max optimizations)",
       "description": "Aggressive floating-point optimizations. Use only when the model's numerical assumptions permit reassociation and reciprocal approximations.",
@@ -59,14 +47,12 @@
   "buildPresets": [
     { "name": "debug",       "configurePreset": "debug"       },
     { "name": "debug-tidy",  "configurePreset": "debug-tidy"  },
-    { "name": "coverage-clang", "configurePreset": "coverage-clang" },
     { "name": "release",     "configurePreset": "release"     },
     { "name": "release-max", "configurePreset": "release-max" }
   ],
   "testPresets": [
     { "name": "debug",       "configurePreset": "debug",       "output": { "outputOnFailure": true } },
     { "name": "debug-tidy",  "configurePreset": "debug-tidy",  "output": { "outputOnFailure": true } },
-    { "name": "coverage-clang", "configurePreset": "coverage-clang", "output": { "outputOnFailure": true } },
     { "name": "release",     "configurePreset": "release",     "output": { "outputOnFailure": true } },
     { "name": "release-max", "configurePreset": "release-max", "output": { "outputOnFailure": true } }
   ]

@@ -1,0 +1,81 @@
+name: Dependency cache smoke test
+
+on:
+  schedule:
+    # Run away from the top of the hour, when scheduled Actions are busiest.
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-cache-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke-test:
+    name: Restore and test (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: GCC
+            cc: gcc
+            cxx: g++
+          - name: Clang
+            cc: clang
+            cxx: clang++
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential \
+            cmake \
+            curl \
+            libopenmpi-dev \
+            ninja-build
+
+      - name: Restore scientific dependencies
+        id: scientific-dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            .dependencies/downloads
+            .dependencies/install
+          key: scientific-dependencies-${{ runner.os }}-${{ runner.arch }}-Debug-${{ matrix.name }}-${{ hashFiles('scripts/install_dependencies.sh') }}
+
+      - name: Build scientific dependencies after a cache miss
+        if: steps.scientific-dependencies.outputs.cache-hit != 'true'
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+          OMPI_CC: ${{ matrix.cc }}
+          OMPI_CXX: ${{ matrix.cxx }}
+        run: >-
+          ./scripts/install_dependencies.sh
+          --science-only
+          --variant debug
+          --jobs 2
+
+      - name: Configure smoke build
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: >-
+          cmake -S . -B build/cache-smoke -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DBUILD_TESTING=ON
+          -DENABLE_SANITIZERS=OFF
+
+      - name: Build
+        run: cmake --build build/cache-smoke --parallel 2
+
+      - name: Run smoke test
+        run: ctest --test-dir build/cache-smoke --output-on-failure

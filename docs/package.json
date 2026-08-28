@@ -3,8 +3,7 @@
   "private": true,
   "scripts": {
     "build": "sourcey build -o dist",
-    "dev": "sourcey dev",
-    "test:tutorial-snippets": "node scripts/tutorial-snippets.test.mjs"
+    "dev": "sourcey dev"
   },
   "devDependencies": {
     "sourcey": "3.6.5"
