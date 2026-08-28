@@ -1,11 +1,7 @@
-#pragma once
-
 #include <boost/ut.hpp>
 #include <rift/version.hpp>
 
-namespace rift_test::test_version {
-
-inline void register_tests()
+int main()
 {
     using namespace boost::ut;
 
@@ -16,6 +12,6 @@ inline void register_tests()
         expect(version.minor == 1_i);
         expect(version.patch == 0_i);
     };
-}
 
-} // namespace rift_test::test_version
+    return static_cast<int>(cfg<>.run());
+}

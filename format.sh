@@ -7,7 +7,6 @@ DIRECTORIES=(
     include
     src
     tests
-    tutorials
 )
 
 EXTENSIONS=(

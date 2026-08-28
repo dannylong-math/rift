@@ -17,9 +17,6 @@ concurrency:
 jobs:
   tests:
     name: Unit tests (${{ matrix.name }})
-    # Full CI is intentionally paused while tests are run locally. Remove this
-    # line to enable the dependency cache/build and compiler matrix below.
-    if: ${{ false }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -86,9 +83,6 @@ jobs:
 
   coverage:
     name: Coverage
-    # Full CI is intentionally paused while tests are run locally. Remove this
-    # line together with the matching gate above to enable coverage reporting.
-    if: ${{ false }}
     needs: tests
     runs-on: ubuntu-24.04
 
@@ -101,7 +95,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes \
             build-essential \
-            clang \
             cmake \
             curl \
             libopenmpi-dev \
@@ -114,15 +107,15 @@ jobs:
           path: |
             .dependencies/downloads
             .dependencies/install
-          key: scientific-dependencies-${{ runner.os }}-${{ runner.arch }}-Debug-Clang-${{ hashFiles('scripts/install_dependencies.sh') }}
+          key: scientific-dependencies-${{ runner.os }}-${{ runner.arch }}-Debug-GCC-${{ hashFiles('scripts/install_dependencies.sh') }}
 
       - name: Build scientific dependencies
         if: steps.scientific-dependencies.outputs.cache-hit != 'true'
         env:
-          CC: clang
-          CXX: clang++
-          OMPI_CC: clang
-          OMPI_CXX: clang++
+          CC: gcc
+          CXX: g++
+          OMPI_CC: gcc
+          OMPI_CXX: g++
         run: >-
           ./scripts/install_dependencies.sh
           --science-only
@@ -131,8 +124,8 @@ jobs:
 
       - name: Configure coverage build
         env:
-          CC: clang
-          CXX: clang++
+          CC: gcc
+          CXX: g++
         run: >-
           cmake -S . -B build/coverage -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
@@ -154,15 +147,15 @@ jobs:
       - name: Generate coverage report
         run: |
           python -m pip install gcovr==8.6
-          llvm_cov="$(clang -print-prog-name=llvm-cov)"
           gcovr \
-            --root "${GITHUB_WORKSPACE}" \
-            --filter "${GITHUB_WORKSPACE}/include/" \
-            --filter "${GITHUB_WORKSPACE}/src/" \
-            --exclude "${GITHUB_WORKSPACE}/build/" \
-            --gcov-executable "${llvm_cov} gcov" \
+            --root . \
+            --filter 'include/rift/' \
+            --filter 'src/' \
+            --print-summary \
             --fail-under-line 100 \
-            --xml-pretty \
+            --fail-under-function 100 \
+            --fail-under-branch 100 \
+            --cobertura-pretty \
             --output coverage.xml \
             build/coverage
 
@@ -170,5 +163,6 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage.xml
+          files: ./coverage.xml
+          disable_search: true
           fail_ci_if_error: true
