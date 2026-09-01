@@ -12,7 +12,7 @@ namespace rift {
 /**
  * \brief Own the process-wide deal.II, p4est, and MPI runtime lifetime.
  *
- * Create exactly one instance on every rank near the top of `main()`. 
+ * Create exactly one instance on every rank near the top of `main()`.
  * This object handles all of the MPI setup required by external libraries.
  * It also configures the thread pool size for parallel mesh algorithms.
  * This object must outlive every other object that depends on deal.II, p4est, or MPI.
@@ -42,7 +42,7 @@ public:
      * deal.II.
      */
     RiftConfig(int& argc, char**& argv, const unsigned int max_threads = 1) : mpi_lifetime_(argc, argv, max_threads) {}
-    
+
     /**
      * \brief Destructor. Finalizes the process-wide runtime.
      */
