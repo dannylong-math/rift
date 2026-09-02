@@ -12,6 +12,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -227,6 +228,40 @@ void test_collected_field_and_topology_errors(rift::RiftContext& context)
     expect(error_count(errors, rift::PhaseGraphErrorCode::duplicate_phase_pair) == std::size_t{2});
     expect(error_count(errors, rift::PhaseGraphErrorCode::invalid_utf8) == std::size_t{6});
     expect(compatibility_calls == std::size_t{0});
+
+    const auto phase_error = std::ranges::find_if(
+        errors, [](const auto& error) { return error.code == rift::PhaseGraphErrorCode::empty_phase_name; });
+    expect(phase_error != errors.end());
+    if (phase_error != errors.end()) {
+        expect(phase_error->subject.has_value());
+        if (phase_error->subject.has_value()) {
+            const auto* subject = std::get_if<rift::PhaseErrorSubject>(&*phase_error->subject);
+            expect(subject != nullptr);
+            if (subject != nullptr) {
+                expect(subject->sorted_index == std::size_t{0});
+                expect(subject->specification.name.empty());
+                expect(subject->specification.physics_key.value().empty());
+            }
+        }
+    }
+
+    const auto interface_error = std::ranges::find_if(
+        errors, [](const auto& error) { return error.code == rift::PhaseGraphErrorCode::empty_interface_name; });
+    expect(interface_error != errors.end());
+    if (interface_error != errors.end()) {
+        expect(interface_error->subject.has_value());
+        if (interface_error->subject.has_value()) {
+            const auto* subject = std::get_if<rift::InterfaceErrorSubject>(&*interface_error->subject);
+            expect(subject != nullptr);
+            if (subject != nullptr) {
+                expect(subject->sorted_index == std::size_t{0});
+                expect(subject->specification.name.empty());
+                expect(subject->specification.minus_phase == "alpha");
+                expect(subject->specification.plus_phase == "beta");
+                expect(subject->specification.operator_key.value().empty());
+            }
+        }
+    }
 }
 
 void test_missing_compatibility(rift::RiftContext& context)
@@ -294,11 +329,29 @@ void test_compatible_failures(rift::RiftContext& context)
     expect(rejection.code == rift::PhaseGraphErrorCode::incompatible_interface);
     expect_message_contains(
         rejection, {"contact model is unavailable", "air-solid", "contact", "solid", "elastic", "air", "ideal-gas"});
+    expect(rejection.subject.has_value());
+    if (rejection.subject.has_value()) {
+        const auto* subject = std::get_if<rift::InterfaceErrorSubject>(&*rejection.subject);
+        expect(subject != nullptr);
+        if (subject != nullptr) {
+            expect(subject->sorted_index == std::size_t{0});
+            expect(subject->specification.name == "air-solid");
+        }
+    }
 
     const auto& exception = errors.at(1);
     expect(exception.code == rift::PhaseGraphErrorCode::compatibility_test_exception);
     expect_message_contains(exception, {"surface registry failed", "free-surface", "surface-tension", "water",
                                         "incompressible", "air", "ideal-gas"});
+    expect(exception.subject.has_value());
+    if (exception.subject.has_value()) {
+        const auto* subject = std::get_if<rift::InterfaceErrorSubject>(&*exception.subject);
+        expect(subject != nullptr);
+        if (subject != nullptr) {
+            expect(subject->sorted_index == std::size_t{1});
+            expect(subject->specification.name == "free-surface");
+        }
+    }
 }
 
 void test_nonstandard_exception(rift::RiftContext& context)
