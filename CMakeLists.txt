@@ -39,6 +39,10 @@ project(rift
     LANGUAGES CXX
 )
 
+find_package(simdutf 9.0.0 EXACT REQUIRED CONFIG
+    HINTS "${RIFT_DEPENDENCIES_DIR}/install/simdutf/lib/cmake/simdutf"
+)
+
 # Prevent in-source builds.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
     message(FATAL_ERROR
@@ -98,6 +102,7 @@ if(ENABLE_CLANG_TIDY)
 endif()
 
 add_library(rift STATIC
+    src/phase_graph.cpp
     src/rift.cpp
 )
 add_library(rift::rift ALIAS rift)
@@ -111,6 +116,7 @@ target_link_libraries(rift
     rift_warnings
     rift_sanitizers
     rift_coverage
+    simdutf::simdutf
 )
 deal_ii_setup_target(rift)
 

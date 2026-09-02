@@ -1,8 +1,8 @@
 # Rift
 
 Rift is a C++23 research library for sharp-interface multiphase flow. It uses
-[deal.II 9.8.0](https://github.com/dealii/dealii/releases/tag/v9.8.0), MPI, and
-p4est.
+[deal.II 9.8.0](https://github.com/dealii/dealii/releases/tag/v9.8.0), MPI,
+p4est, and simdutf.
 
 This branch is a clean-slate re-foundation. The library currently provides only
 its semantic version API; scientific components will be reintroduced through
@@ -23,7 +23,7 @@ Run:
 ./scripts/install_dependencies.sh
 ```
 
-The script installs version-pinned zlib, p4est, deal.II, and documentation
+The script installs version-pinned simdutf, zlib, p4est, deal.II, and documentation
 dependencies under `.dependencies/`. Existing successful installations are
 reused. The deal.II build can take a substantial amount of time and disk space.
 Useful alternatives are:

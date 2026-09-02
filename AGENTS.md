@@ -6,8 +6,8 @@
 - This branch is a clean-slate re-foundation. The implemented public surface is
   currently limited to the semantic version API in `include/rift/version.hpp`.
   Do not present designs in local architecture notes as implemented behavior.
-- The scientific dependency stack is deal.II 9.8.0, p4est 2.8.7, zlib 1.3.1,
-  and MPI. Unit tests use Boost.UT 2.3.1, and Sourcey 3.6.5 builds the
+- The scientific dependency stack is deal.II 9.8.0, simdutf 9.0.0, p4est 2.8.7,
+  zlib 1.3.1, and MPI. Unit tests use Boost.UT 2.3.1, and Sourcey 3.6.5 builds the
   documentation.
 - Rift is pre-release software. Source and ABI compatibility are not yet gates,
   but update every in-repository caller, test, and document with an API change.
