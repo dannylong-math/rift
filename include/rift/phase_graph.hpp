@@ -5,6 +5,7 @@
  * \brief Value types used to configure and diagnose Rift's phase graph.
  */
 
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <functional>
@@ -15,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace rift {
@@ -295,6 +297,46 @@ enum class PhaseGraphErrorCode : std::uint8_t {
 };
 
 /**
+ * \brief Identify one phase specification associated with a graph error.
+ *
+ * The sorted index groups atomic errors from the same specification and is a
+ * fallback when its configured name cannot identify it clearly. The owned
+ * specification supplies exact configured fields for human-readable output.
+ *
+ * \ingroup phase_graph
+ */
+struct PhaseErrorSubject {
+    /** \brief Position of this specification after canonical sorting. */
+    std::size_t sorted_index;
+
+    /** \brief Exact configured phase fields associated with the error. */
+    PhaseSpecification specification;
+};
+
+/**
+ * \brief Identify one interface specification associated with a graph error.
+ *
+ * The sorted index groups atomic errors from the same specification and is a
+ * fallback when its configured name cannot identify it clearly. The owned
+ * specification supplies exact configured fields for human-readable output.
+ *
+ * \ingroup phase_graph
+ */
+struct InterfaceErrorSubject {
+    /** \brief Position of this specification after canonical sorting. */
+    std::size_t sorted_index;
+
+    /** \brief Exact configured interface fields associated with the error. */
+    InterfaceSpecification specification;
+};
+
+/**
+ * \brief Configuration subject associated with one atomic graph error.
+ * \ingroup phase_graph
+ */
+using PhaseGraphErrorSubject = std::variant<PhaseErrorSubject, InterfaceErrorSubject>;
+
+/**
  * \brief Pair a machine-readable graph error code with a human-readable message.
  * \ingroup phase_graph
  */
@@ -304,6 +346,9 @@ struct PhaseGraphError {
 
     /** \brief Human-readable diagnostic naming relevant configuration values. */
     std::string message;
+
+    /** \brief Exact phase or interface input associated with this error, if any. */
+    std::optional<PhaseGraphErrorSubject> subject = std::nullopt;
 };
 
 /**
@@ -311,6 +356,20 @@ struct PhaseGraphError {
  * \ingroup phase_graph
  */
 using PhaseGraphErrors = std::vector<PhaseGraphError>;
+
+/**
+ * \brief Format collected graph errors for human-readable presentation.
+ *
+ * Atomic errors associated with the same sorted phase or interface are grouped
+ * beneath one table of configured and expected fields. Unsafe bytes and
+ * terminal control characters are escaped. Errors without one specific
+ * subject remain separate diagnostic blocks. This function performs no output.
+ *
+ * \param errors collected atomic errors in deterministic construction order.
+ * \return formatted text, or an empty string when `errors` is empty.
+ * \ingroup phase_graph
+ */
+[[nodiscard]] std::string format_phase_graph_errors(std::span<const PhaseGraphError> errors);
 
 /**
  * \brief Immutable canonical phase graph owned by one Rift context.

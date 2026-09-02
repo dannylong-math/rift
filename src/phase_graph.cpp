@@ -4,6 +4,7 @@
  */
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deal.II/base/mpi.h>
@@ -19,11 +20,13 @@
 #include <rift/phase_graph.hpp>
 #include <rift/rift_context.hpp>
 #include <simdutf.h> // NOLINT(misc-include-cleaner): simdutf's public umbrella owns this declaration.
+#include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace rift {
@@ -128,9 +131,268 @@ void sort_interfaces(std::vector<InterfaceSpecification>& interfaces)
 }
 
 /** \brief Append one collected local configuration error. */
-void add_error(PhaseGraphErrors& errors, const PhaseGraphErrorCode code, std::string message)
+void add_error(PhaseGraphErrors& errors, const PhaseGraphErrorCode code, std::string message,
+               std::optional<PhaseGraphErrorSubject> subject = std::nullopt)
 {
-    errors.push_back({.code = code, .message = std::move(message)});
+    errors.push_back({.code = code, .message = std::move(message), .subject = std::move(subject)});
+}
+
+/** \brief Snapshot one sorted phase as diagnostic subject metadata. */
+[[nodiscard]] PhaseGraphErrorSubject make_error_subject(const std::size_t index,
+                                                        const PhaseSpecification& specification)
+{
+    return PhaseErrorSubject{.sorted_index = index, .specification = specification};
+}
+
+/** \brief Snapshot one sorted interface as diagnostic subject metadata. */
+[[nodiscard]] PhaseGraphErrorSubject make_error_subject(const std::size_t index,
+                                                        const InterfaceSpecification& specification)
+{
+    return InterfaceErrorSubject{.sorted_index = index, .specification = specification};
+}
+
+/** \brief Stable names used when formatting machine-readable error codes. */
+constexpr std::array phase_graph_error_code_names{
+    std::string_view{"no_phases"},
+    std::string_view{"empty_phase_name"},
+    std::string_view{"empty_physics_key"},
+    std::string_view{"duplicate_phase_name"},
+    std::string_view{"empty_interface_name"},
+    std::string_view{"empty_interface_operator_key"},
+    std::string_view{"duplicate_interface_name"},
+    std::string_view{"missing_incident_phase"},
+    std::string_view{"self_interface"},
+    std::string_view{"duplicate_phase_pair"},
+    std::string_view{"missing_compatibility_check"},
+    std::string_view{"invalid_utf8"},
+    std::string_view{"incompatible_interface"},
+    std::string_view{"compatibility_test_exception"},
+    std::string_view{"phase_graph_creation_already_attempted"},
+    std::string_view{"collective_input_mismatch"},
+    std::string_view{"collective_compatibility_mismatch"},
+};
+
+static_assert(phase_graph_error_code_names.size() ==
+              static_cast<std::size_t>(PhaseGraphErrorCode::collective_compatibility_mismatch) + 1);
+
+/** \brief Return the stable spelling of one machine-readable error code. */
+[[nodiscard]] std::string_view phase_graph_error_code_name(const PhaseGraphErrorCode code) noexcept
+{
+    const auto index = static_cast<std::size_t>(code);
+    if (index >= phase_graph_error_code_names.size()) {
+        return "unknown_error";
+    }
+    return phase_graph_error_code_names.at(index);
+}
+
+/** \brief Quote configured text while making unsafe bytes visible. */
+[[nodiscard]] std::string quote_configured_value(const std::string_view value)
+{
+    const auto valid_utf8 = is_valid_utf8(value);
+    std::string output{"\""};
+    output.reserve(value.size() + 2);
+
+    for (const auto character : value) {
+        const auto byte = static_cast<unsigned char>(character);
+        switch (byte) {
+        case '\b':
+            output += R"(\b)";
+            break;
+        case '\f':
+            output += R"(\f)";
+            break;
+        case '\n':
+            output += R"(\n)";
+            break;
+        case '\r':
+            output += R"(\r)";
+            break;
+        case '\t':
+            output += R"(\t)";
+            break;
+        case '\\':
+            output += R"(\\)";
+            break;
+        case '"':
+            output += R"(\")";
+            break;
+        default:
+            if (byte < 0x20 || byte == 0x7F || (!valid_utf8 && byte >= 0x80)) {
+                output += std::format(R"(\x{:02X})", static_cast<unsigned int>(byte));
+            }
+            else {
+                output.push_back(character);
+            }
+        }
+    }
+    output.push_back('"');
+    return output;
+}
+
+/** \brief One row in a human-readable configured-versus-expected table. */
+struct DiagnosticField {
+    std::string_view name;
+    std::string configured;
+    std::string_view expected;
+};
+
+/** \brief Describe the configured fields of one phase subject. */
+[[nodiscard]] std::vector<DiagnosticField> diagnostic_fields(const PhaseErrorSubject& subject)
+{
+    return {
+        {.name = "Name",
+         .configured = quote_configured_value(subject.specification.name),
+         .expected = "non-empty unique UTF-8 string"},
+        {.name = "Physics",
+         .configured = quote_configured_value(subject.specification.physics_key.value()),
+         .expected = "non-empty UTF-8 phase-physics key"},
+    };
+}
+
+/** \brief Describe the configured fields of one interface subject. */
+[[nodiscard]] std::vector<DiagnosticField> diagnostic_fields(const InterfaceErrorSubject& subject)
+{
+    return {
+        {.name = "Name",
+         .configured = quote_configured_value(subject.specification.name),
+         .expected = "non-empty unique UTF-8 string"},
+        {.name = "Minus phase",
+         .configured = quote_configured_value(subject.specification.minus_phase),
+         .expected = "name of one unique configured phase"},
+        {.name = "Plus phase",
+         .configured = quote_configured_value(subject.specification.plus_phase),
+         .expected = "different unique configured phase name"},
+        {.name = "Operator",
+         .configured = quote_configured_value(subject.specification.operator_key.value()),
+         .expected = "compatible non-empty UTF-8 interface-operator key"},
+    };
+}
+
+/** \brief Make a human-recognizable heading for one phase subject. */
+[[nodiscard]] std::string diagnostic_heading(const PhaseErrorSubject& subject)
+{
+    if (subject.specification.name.empty()) {
+        return std::format("Phase with empty name (canonical position {})", subject.sorted_index);
+    }
+    return std::format("Phase {}", quote_configured_value(subject.specification.name));
+}
+
+/** \brief Make a human-recognizable heading for one interface subject. */
+[[nodiscard]] std::string diagnostic_heading(const InterfaceErrorSubject& subject)
+{
+    if (subject.specification.name.empty()) {
+        return std::format("Interface with empty name (canonical position {})", subject.sorted_index);
+    }
+    return std::format("Interface {}", quote_configured_value(subject.specification.name));
+}
+
+/** \brief Return whether two atomic errors identify the same sorted input. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): the comparison is symmetric.
+[[nodiscard]] bool same_error_subject(const PhaseGraphErrorSubject& left, const PhaseGraphErrorSubject& right) noexcept
+{
+    if (const auto* left_phase = std::get_if<PhaseErrorSubject>(&left)) {
+        const auto* right_phase = std::get_if<PhaseErrorSubject>(&right);
+        return right_phase != nullptr && left_phase->sorted_index == right_phase->sorted_index;
+    }
+
+    const auto* left_interface = std::get_if<InterfaceErrorSubject>(&left);
+    const auto* right_interface = std::get_if<InterfaceErrorSubject>(&right);
+    return right_interface != nullptr && left_interface->sorted_index == right_interface->sorted_index;
+}
+
+/** \brief Atomic errors collected beneath one optional configuration subject. */
+struct DiagnosticGroup {
+    const PhaseGraphErrorSubject* subject;
+    std::vector<const PhaseGraphError*> errors;
+};
+
+/** \brief Group subject errors while preserving each group's first occurrence. */
+[[nodiscard]] std::vector<DiagnosticGroup> group_errors(const std::span<const PhaseGraphError> errors)
+{
+    std::vector<DiagnosticGroup> groups;
+    groups.reserve(errors.size());
+    for (const auto& error : errors) {
+        if (!error.subject.has_value()) {
+            groups.push_back({.subject = nullptr, .errors = {&error}});
+            continue;
+        }
+
+        const auto position = std::ranges::find_if(groups, [&error](const DiagnosticGroup& group) {
+            return group.subject != nullptr && same_error_subject(*group.subject, *error.subject);
+        });
+        if (position == groups.end()) {
+            groups.push_back({.subject = &*error.subject, .errors = {&error}});
+        }
+        else {
+            position->errors.push_back(&error);
+        }
+    }
+    return groups;
+}
+
+/** \brief Append one padded table cell. */
+void append_padded(std::string& output, const std::string_view value, const std::size_t width)
+{
+    output += value;
+    output.append(width - value.size(), ' ');
+}
+
+/** \brief Format one subject table and its grouped atomic errors. */
+[[nodiscard]] std::string format_subject_errors(const DiagnosticGroup& group)
+{
+    auto heading = std::visit([](const auto& subject) { return diagnostic_heading(subject); }, *group.subject);
+    auto fields = std::visit([](const auto& subject) { return diagnostic_fields(subject); }, *group.subject);
+
+    std::size_t field_width = std::string_view{"Field"}.size();
+    std::size_t configured_width = std::string_view{"Configured"}.size();
+    std::size_t expected_width = std::string_view{"Expected"}.size();
+    for (const auto& field : fields) {
+        field_width = std::max(field_width, field.name.size());
+        configured_width = std::max(configured_width, field.configured.size());
+        expected_width = std::max(expected_width, field.expected.size());
+    }
+
+    std::string output = std::move(heading);
+    output += "\n\n";
+    append_padded(output, "Field", field_width);
+    output += "  ";
+    append_padded(output, "Configured", configured_width);
+    output += "  Expected\n";
+    output.append(field_width + configured_width + expected_width + 4, '-');
+    for (const auto& field : fields) {
+        output.push_back('\n');
+        append_padded(output, field.name, field_width);
+        output += "  ";
+        append_padded(output, field.configured, configured_width);
+        output += "  ";
+        output += field.expected;
+    }
+
+    output += "\n\nErrors";
+    for (const auto* error : group.errors) {
+        output += std::format("\n  [{}] {}", phase_graph_error_code_name(error->code), error->message);
+    }
+    return output;
+}
+
+/** \brief Format one error that has no phase or interface subject. */
+[[nodiscard]] std::string format_unscoped_error(const PhaseGraphError& error)
+{
+    return std::format("[{}] {}", phase_graph_error_code_name(error.code), error.message);
+}
+
+/** \brief Format all diagnostic groups without performing output. */
+[[nodiscard]] std::string format_phase_graph_errors_impl(const std::span<const PhaseGraphError> errors)
+{
+    std::string output;
+    for (const auto& group : group_errors(errors)) {
+        if (!output.empty()) {
+            output += "\n\n";
+        }
+        output +=
+            group.subject == nullptr ? format_unscoped_error(*group.errors.front()) : format_subject_errors(group);
+    }
+    return output;
 }
 
 /** \brief Group sorted phase positions by a valid, non-empty name. */
@@ -147,24 +409,25 @@ using NameOccurrences = std::unordered_map<std::string, std::vector<std::size_t>
     occurrences.reserve(phases.size());
     for (std::size_t index = 0; index < phases.size(); ++index) {
         const auto& phase = phases.at(index);
+        const auto subject = make_error_subject(index, phase);
         const auto name_is_utf8 = is_valid_utf8(phase.name);
         const auto key_is_utf8 = is_valid_utf8(phase.physics_key.value());
 
         if (phase.name.empty()) {
             add_error(errors, PhaseGraphErrorCode::empty_phase_name,
-                      std::format("phase at sorted index {} has an empty name", index));
+                      std::format("phase at sorted index {} has an empty name", index), subject);
         }
         if (phase.physics_key.value().empty()) {
             add_error(errors, PhaseGraphErrorCode::empty_physics_key,
-                      std::format("phase at sorted index {} has an empty physics key", index));
+                      std::format("phase at sorted index {} has an empty physics key", index), subject);
         }
         if (!name_is_utf8) {
             add_error(errors, PhaseGraphErrorCode::invalid_utf8,
-                      std::format("phase at sorted index {} has invalid UTF-8 in its name", index));
+                      std::format("phase at sorted index {} has invalid UTF-8 in its name", index), subject);
         }
         if (!key_is_utf8) {
             add_error(errors, PhaseGraphErrorCode::invalid_utf8,
-                      std::format("phase at sorted index {} has invalid UTF-8 in its physics key", index));
+                      std::format("phase at sorted index {} has invalid UTF-8 in its physics key", index), subject);
         }
 
         if (!phase.name.empty() && name_is_utf8) {
@@ -187,24 +450,26 @@ void validate_interface_fields(const std::vector<InterfaceSpecification>& interf
 
     for (std::size_t index = 0; index < interfaces.size(); ++index) {
         const auto& interface = interfaces.at(index);
+        const auto subject = make_error_subject(index, interface);
         const auto name_is_utf8 = is_valid_utf8(interface.name);
         const auto operator_is_utf8 = is_valid_utf8(interface.operator_key.value());
 
         if (interface.name.empty()) {
             add_error(errors, PhaseGraphErrorCode::empty_interface_name,
-                      std::format("interface at sorted index {} has an empty name", index));
+                      std::format("interface at sorted index {} has an empty name", index), subject);
         }
         if (interface.operator_key.value().empty()) {
             add_error(errors, PhaseGraphErrorCode::empty_interface_operator_key,
-                      std::format("interface at sorted index {} has an empty operator key", index));
+                      std::format("interface at sorted index {} has an empty operator key", index), subject);
         }
         if (!name_is_utf8) {
             add_error(errors, PhaseGraphErrorCode::invalid_utf8,
-                      std::format("interface at sorted index {} has invalid UTF-8 in its name", index));
+                      std::format("interface at sorted index {} has invalid UTF-8 in its name", index), subject);
         }
         if (!operator_is_utf8) {
             add_error(errors, PhaseGraphErrorCode::invalid_utf8,
-                      std::format("interface at sorted index {} has invalid UTF-8 in its operator key", index));
+                      std::format("interface at sorted index {} has invalid UTF-8 in its operator key", index),
+                      subject);
         }
 
         if (!interface.name.empty() && name_is_utf8) {
@@ -236,16 +501,19 @@ void validate_interface_topology_entry(const InterfaceSpecification& interface, 
                                        const NameOccurrences& phase_occurrences, PhasePairOccurrences& pair_occurrences,
                                        PhaseGraphErrors& errors)
 {
+    const auto subject = make_error_subject(index, interface);
     const auto minus_is_utf8 = is_valid_utf8(interface.minus_phase);
     const auto plus_is_utf8 = is_valid_utf8(interface.plus_phase);
 
     if (!minus_is_utf8) {
         add_error(errors, PhaseGraphErrorCode::invalid_utf8,
-                  std::format("interface at sorted index {} has invalid UTF-8 in its minus-phase reference", index));
+                  std::format("interface at sorted index {} has invalid UTF-8 in its minus-phase reference", index),
+                  subject);
     }
     if (!plus_is_utf8) {
         add_error(errors, PhaseGraphErrorCode::invalid_utf8,
-                  std::format("interface at sorted index {} has invalid UTF-8 in its plus-phase reference", index));
+                  std::format("interface at sorted index {} has invalid UTF-8 in its plus-phase reference", index),
+                  subject);
     }
 
     const auto minus_position = minus_is_utf8 ? phase_occurrences.find(interface.minus_phase) : phase_occurrences.end();
@@ -254,18 +522,21 @@ void validate_interface_topology_entry(const InterfaceSpecification& interface, 
     if (minus_is_utf8 && minus_position == phase_occurrences.end()) {
         add_error(errors, PhaseGraphErrorCode::missing_incident_phase,
                   std::format("interface at sorted index {} refers to missing minus phase '{}'", index,
-                              interface.minus_phase));
+                              interface.minus_phase),
+                  subject);
     }
     if (plus_is_utf8 && plus_position == phase_occurrences.end()) {
         add_error(
             errors, PhaseGraphErrorCode::missing_incident_phase,
-            std::format("interface at sorted index {} refers to missing plus phase '{}'", index, interface.plus_phase));
+            std::format("interface at sorted index {} refers to missing plus phase '{}'", index, interface.plus_phase),
+            subject);
     }
 
     const auto is_self_interface = minus_is_utf8 && plus_is_utf8 && interface.minus_phase == interface.plus_phase;
     if (is_self_interface) {
         add_error(errors, PhaseGraphErrorCode::self_interface,
-                  std::format("interface at sorted index {} joins phase '{}' to itself", index, interface.minus_phase));
+                  std::format("interface at sorted index {} joins phase '{}' to itself", index, interface.minus_phase),
+                  subject);
     }
 
     if (is_self_interface || !is_unique_phase(phase_occurrences, interface.minus_phase) ||
@@ -530,6 +801,7 @@ struct LocalCompatibilityAttempt {
     for (const auto& interface : candidate.interfaces) {
         const auto& minus_phase = candidate.phases.at(interface.minus_phase.value());
         const auto& plus_phase = candidate.phases.at(interface.plus_phase.value());
+        const auto subject = make_error_subject(interface.id.value(), interface.specification);
         append_integer(attempt.agreement_record, interface.id.value());
 
         try {
@@ -544,7 +816,8 @@ struct LocalCompatibilityAttempt {
             attempt.agreement_record.push_back(decision.error());
             add_error(attempt.errors, PhaseGraphErrorCode::incompatible_interface,
                       format_compatibility_error(minus_phase, plus_phase, interface,
-                                                 std::format("was rejected: {}", decision.error())));
+                                                 std::format("was rejected: {}", decision.error())),
+                      subject);
         }
         catch (const std::exception& exception) {
             attempt.agreement_record.emplace_back("exception");
@@ -552,14 +825,16 @@ struct LocalCompatibilityAttempt {
             attempt.agreement_record.emplace_back(exception.what());
             add_error(attempt.errors, PhaseGraphErrorCode::compatibility_test_exception,
                       format_compatibility_error(minus_phase, plus_phase, interface,
-                                                 std::format("compatibility test threw: {}", exception.what())));
+                                                 std::format("compatibility test threw: {}", exception.what())),
+                      subject);
         }
         catch (...) {
             attempt.agreement_record.emplace_back("exception");
             attempt.agreement_record.emplace_back("non-standard");
             add_error(attempt.errors, PhaseGraphErrorCode::compatibility_test_exception,
                       format_compatibility_error(minus_phase, plus_phase, interface,
-                                                 "compatibility test threw a non-standard exception"));
+                                                 "compatibility test threw a non-standard exception"),
+                      subject);
         }
     }
     return attempt;
@@ -593,6 +868,11 @@ build_collectively_compatible_local_phase_graph(const MPI_Comm communicator, Pha
 }
 
 } // namespace
+
+std::string format_phase_graph_errors(const std::span<const PhaseGraphError> errors)
+{
+    return format_phase_graph_errors_impl(errors);
+}
 
 PhaseGraphResult RiftContext::create_phase_graph(PhaseGraphSpecification specification,
                                                  InterfaceCompatibilityTest compatibility_test)
