@@ -190,7 +190,8 @@ namespace interface_compatibility {
  * \return an accepting compatibility decision.
  * \ingroup phase_graph
  */
-[[nodiscard]] inline InterfaceCompatibilityDecision accept_all(const PhaseSpecification& /* minus_phase */, const PhaseSpecification& /* plus_phase */,
+[[nodiscard]] inline InterfaceCompatibilityDecision accept_all(const PhaseSpecification& /* minus_phase */,
+                                                               const PhaseSpecification& /* plus_phase */,
                                                                const InterfaceSpecification& /* interface */) noexcept
 {
     return {};
@@ -233,6 +234,8 @@ enum class PhaseGraphErrorCode : std::uint8_t {
     invalid_utf8,
     /** \brief The compatibility query rejected a phase/operator combination. */
     incompatible_interface,
+    /** \brief The compatibility query threw while examining an interface. */
+    compatibility_test_exception,
     /** \brief Canonical graph input or local status differs across world ranks. */
     collective_input_mismatch,
     /** \brief Compatibility acceptance or rejection differs across world ranks. */

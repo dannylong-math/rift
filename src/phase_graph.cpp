@@ -6,9 +6,12 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <deal.II/base/mpi.h>
 #include <expected>
 #include <format>
 #include <map>
+#include <mpi.h>
+#include <optional>
 #include <ranges>
 #include <rift/phase_graph.hpp>
 #include <simdutf.h> // NOLINT(misc-include-cleaner): simdutf's public umbrella owns this declaration.
@@ -266,12 +269,77 @@ struct LocalPhaseGraphCandidate {
 
 using LocalPhaseGraphResult = std::expected<LocalPhaseGraphCandidate, PhaseGraphErrors>;
 
-/** \brief Construct a sorted local candidate or every deterministic structural error. */
-[[maybe_unused, nodiscard]] LocalPhaseGraphResult build_local_phase_graph(PhaseGraphSpecification specification,
-                                                                          const bool compatibility_test_available)
+/** \brief Exact private fields exchanged to compare local graph construction. */
+using AgreementRecord = std::vector<std::string>;
+
+/** \brief Pair a local graph result with the exact record used for rank agreement. */
+struct LocalPhaseGraphAttempt {
+    AgreementRecord agreement_record;
+    LocalPhaseGraphResult result;
+};
+
+/** \brief Append an integer to the structured agreement record. */
+template<class Integer> void append_integer(AgreementRecord& record, const Integer value)
+{
+    record.push_back(std::to_string(value));
+}
+
+/** \brief Record every sorted input field without delimiter-based encoding. */
+[[nodiscard]] AgreementRecord make_input_agreement_record(const PhaseGraphSpecification& specification)
+{
+    AgreementRecord record{"rift.phase_graph.input.v1", "phases"};
+    append_integer(record, specification.phases.size());
+    for (const auto& phase : specification.phases) {
+        record.push_back(phase.name);
+        record.emplace_back(phase.physics_key.value());
+    }
+
+    record.emplace_back("interfaces");
+    append_integer(record, specification.interfaces.size());
+    for (const auto& interface : specification.interfaces) {
+        record.push_back(interface.name);
+        record.push_back(interface.minus_phase);
+        record.push_back(interface.plus_phase);
+        record.emplace_back(interface.operator_key.value());
+    }
+    return record;
+}
+
+/** \brief Append a failed local result to its agreement record. */
+void append_error_result(AgreementRecord& record, const PhaseGraphErrors& errors)
+{
+    record.emplace_back("errors");
+    append_integer(record, errors.size());
+    for (const auto& error : errors) {
+        append_integer(record, static_cast<unsigned int>(error.code));
+        record.push_back(error.message);
+    }
+}
+
+/** \brief Append the derived IDs and endpoints of a successful local candidate. */
+void append_candidate_result(AgreementRecord& record, const LocalPhaseGraphCandidate& candidate)
+{
+    record.emplace_back("candidate");
+    append_integer(record, candidate.phases.size());
+    for (const auto& phase : candidate.phases) {
+        append_integer(record, phase.id.value());
+    }
+
+    append_integer(record, candidate.interfaces.size());
+    for (const auto& interface : candidate.interfaces) {
+        append_integer(record, interface.id.value());
+        append_integer(record, interface.minus_phase.value());
+        append_integer(record, interface.plus_phase.value());
+    }
+}
+
+/** \brief Construct a sorted local result and its exact agreement record. */
+[[nodiscard]] LocalPhaseGraphAttempt build_local_phase_graph_attempt(PhaseGraphSpecification specification,
+                                                                     const bool compatibility_test_available)
 {
     sort_phases(specification.phases);
     sort_interfaces(specification.interfaces);
+    auto agreement_record = make_input_agreement_record(specification);
 
     PhaseGraphErrors errors;
     const auto phase_occurrences = validate_phases(specification.phases, errors);
@@ -284,7 +352,8 @@ using LocalPhaseGraphResult = std::expected<LocalPhaseGraphCandidate, PhaseGraph
     }
 
     if (!errors.empty()) {
-        return std::unexpected(std::move(errors));
+        append_error_result(agreement_record, errors);
+        return {.agreement_record = std::move(agreement_record), .result = std::unexpected(std::move(errors))};
     }
 
     LocalPhaseGraphCandidate candidate;
@@ -305,7 +374,38 @@ using LocalPhaseGraphResult = std::expected<LocalPhaseGraphCandidate, PhaseGraph
         candidate.interfaces.push_back(
             {.id = id, .minus_phase = minus_phase, .plus_phase = plus_phase, .specification = std::move(interface)});
     }
-    return candidate;
+    append_candidate_result(agreement_record, candidate);
+    return {.agreement_record = std::move(agreement_record), .result = std::move(candidate)};
+}
+
+/** \brief Find the first rank whose exact agreement record differs from rank zero. */
+[[nodiscard]] std::optional<unsigned int> find_first_mismatching_rank(const MPI_Comm communicator,
+                                                                      const AgreementRecord& local_record)
+{
+    const auto records = dealii::Utilities::MPI::all_gather(communicator, local_record);
+    for (std::size_t rank = 1; rank < records.size(); ++rank) {
+        if (records.at(rank) != records.front()) {
+            return static_cast<unsigned int>(rank);
+        }
+    }
+    return std::nullopt;
+}
+
+/** \brief Return a local graph result only when every world rank constructed it identically. */
+[[maybe_unused, nodiscard]] LocalPhaseGraphResult
+build_collectively_agreed_local_phase_graph(const MPI_Comm communicator, PhaseGraphSpecification specification,
+                                            const bool compatibility_test_available)
+{
+    auto attempt = build_local_phase_graph_attempt(std::move(specification), compatibility_test_available);
+    const auto mismatching_rank = find_first_mismatching_rank(communicator, attempt.agreement_record);
+    if (mismatching_rank.has_value()) {
+        PhaseGraphErrors errors;
+        add_error(errors, PhaseGraphErrorCode::collective_input_mismatch,
+                  std::format("canonical phase-graph input or structural result on rank {} differs from rank 0",
+                              mismatching_rank.value()));
+        return std::unexpected(std::move(errors));
+    }
+    return std::move(attempt.result);
 }
 
 } // namespace

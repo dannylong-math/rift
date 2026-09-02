@@ -49,13 +49,20 @@
 - Name tests after the behavior or public object they verify, using a `_test.cpp`
   suffix. Keep independent oracles and cover failure behavior as well as the
   expected path.
-- No MPI test harness is currently defined. Introducing multi-rank tests is a
-  separate design decision; do not recreate the previous MPI wrappers or test
-  registries without user approval.
+- `tests/mpi/*.cpp` sources are non-recursively discovered as self-contained
+  Boost.UT executables. Each executable is registered through CMake's
+  `MPIEXEC_*` variables at one, two, and three ranks; do not introduce custom
+  MPI wrappers or test registries.
 - Run one test with:
 
   ```console
   ctest --preset debug -R '^<test_name>$' --output-on-failure
+  ```
+
+- Run every MPI variant with:
+
+  ```console
+  ctest --preset debug -L mpi --output-on-failure
   ```
 
 ## Coverage

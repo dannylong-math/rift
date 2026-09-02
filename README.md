@@ -51,8 +51,8 @@ The debug preset enables AddressSanitizer and UndefinedBehaviorSanitizer.
 `release`, `debug-tidy`, and `release-max` presets are also available.
 
 Each `tests/*.cpp` file is automatically built as one same-named CTest using
-Boost.UT. MPI tests are intentionally deferred until their simpler replacement
-is designed.
+Boost.UT. Each `tests/mpi/*.cpp` file is built once and registered as one-,
+two-, and three-rank CTests using the MPI launcher selected by CMake.
 
 ## Continuous integration and coverage
 
