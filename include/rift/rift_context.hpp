@@ -2,7 +2,7 @@
 
 /**
  * \file
- * \brief Process-wide deal.II, p4est, and MPI runtime configuration.
+ * \brief Process-wide Rift simulation context.
  */
 
 #include <deal.II/base/mpi.h>
@@ -10,7 +10,7 @@
 namespace rift {
 
 /**
- * \brief Own the process-wide deal.II, p4est, and MPI runtime lifetime.
+ * \brief Own process-wide Rift services and their runtime lifetime.
  *
  * Create exactly one instance on every rank near the top of `main()`.
  * This object handles all of the MPI setup required by external libraries.
@@ -18,18 +18,18 @@ namespace rift {
  * This object must outlive every other object that depends on deal.II, p4est, or MPI.
  *
  * ```cpp
- * #include <rift/rift_config.hpp>
+ * #include <rift/rift_context.hpp>
  * int main(int argc, char** argv)
  * {
- *     rift::RiftConfig config(argc, argv);
+ *     rift::RiftContext context(argc, argv);
  *     // ... rest of the program
- *     return 0; // Destruction of `config` finalizes deal.II, p4est, and MPI.
+ *     return 0; // Destruction of `context` finalizes deal.II, p4est, and MPI.
  * }
  * ```
  *
  * \ingroup core
  */
-class RiftConfig {
+class RiftContext {
 public:
     /**
      * \brief Initialize the process-wide runtime.
@@ -41,35 +41,35 @@ public:
      * \param[in] max_threads maximum thread count forwarded unchanged to
      * deal.II.
      */
-    RiftConfig(int& argc, char**& argv, const unsigned int max_threads = 1) : mpi_lifetime_(argc, argv, max_threads) {}
+    RiftContext(int& argc, char**& argv, const unsigned int max_threads = 1) : mpi_lifetime_(argc, argv, max_threads) {}
 
     /**
      * \brief Destructor. Finalizes the process-wide runtime.
      */
-    ~RiftConfig() = default;
+    ~RiftContext() = default;
 
     /**
      * \brief Copy construction is disabled because the runtime has one owner.
      */
-    RiftConfig(const RiftConfig&) = delete;
+    RiftContext(const RiftContext&) = delete;
 
     /**
      * \brief Copy assignment is disabled because the runtime has one owner.
      */
-    RiftConfig& operator=(const RiftConfig&) = delete;
+    RiftContext& operator=(const RiftContext&) = delete;
 
     /**
      * \brief Move construction is disabled to keep the lifetime anchor stable.
      */
-    RiftConfig(RiftConfig&&) = delete;
+    RiftContext(RiftContext&&) = delete;
 
     /**
      * \brief Move assignment is disabled to keep the lifetime anchor stable.
      */
-    RiftConfig& operator=(RiftConfig&&) = delete;
+    RiftContext& operator=(RiftContext&&) = delete;
 
     /**
-     * \brief Access Rift's world communicator during this configuration's
+     * \brief Access Rift's world communicator during this context's
      * lifetime.
      *
      * \return borrowed `MPI_COMM_WORLD`; the caller must never free it.

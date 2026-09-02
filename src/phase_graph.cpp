@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deal.II/base/mpi.h>
+#include <exception>
 #include <expected>
 #include <format>
 #include <map>
@@ -249,24 +250,38 @@ void validate_interface_topology(const std::vector<PhaseSpecification>& phases,
 
 /** \brief One sorted phase with an ID equal to its vector position. */
 struct LocalPhase {
+    /** \brief Contiguous identifier assigned after sorting. */
     PhaseId id;
+
+    /** \brief Canonically ordered owning phase specification. */
     PhaseSpecification specification;
 };
 
 /** \brief One sorted interface retaining its declared physical orientation. */
 struct LocalInterface {
+    /** \brief Contiguous identifier assigned after sorting. */
     InterfaceId id;
+
+    /** \brief Resolved identifier of the declared minus phase. */
     PhaseId minus_phase;
+
+    /** \brief Resolved identifier of the declared plus phase. */
     PhaseId plus_phase;
+
+    /** \brief Canonically ordered owning interface specification. */
     InterfaceSpecification specification;
 };
 
 /** \brief Private graph content consumed later by the collective factory. */
 struct LocalPhaseGraphCandidate {
+    /** \brief Canonically ordered phases. */
     std::vector<LocalPhase> phases;
+
+    /** \brief Canonically ordered interfaces. */
     std::vector<LocalInterface> interfaces;
 };
 
+/** \brief A local canonical candidate or its collected structural errors. */
 using LocalPhaseGraphResult = std::expected<LocalPhaseGraphCandidate, PhaseGraphErrors>;
 
 /** \brief Exact private fields exchanged to compare local graph construction. */
@@ -274,7 +289,10 @@ using AgreementRecord = std::vector<std::string>;
 
 /** \brief Pair a local graph result with the exact record used for rank agreement. */
 struct LocalPhaseGraphAttempt {
+    /** \brief Structured fields compared exactly across ranks. */
     AgreementRecord agreement_record;
+
+    /** \brief Local candidate or collected structural errors. */
     LocalPhaseGraphResult result;
 };
 
@@ -392,9 +410,9 @@ void append_candidate_result(AgreementRecord& record, const LocalPhaseGraphCandi
 }
 
 /** \brief Return a local graph result only when every world rank constructed it identically. */
-[[maybe_unused, nodiscard]] LocalPhaseGraphResult
-build_collectively_agreed_local_phase_graph(const MPI_Comm communicator, PhaseGraphSpecification specification,
-                                            const bool compatibility_test_available)
+[[nodiscard]] LocalPhaseGraphResult build_collectively_agreed_local_phase_graph(const MPI_Comm communicator,
+                                                                                PhaseGraphSpecification specification,
+                                                                                const bool compatibility_test_available)
 {
     auto attempt = build_local_phase_graph_attempt(std::move(specification), compatibility_test_available);
     const auto mismatching_rank = find_first_mismatching_rank(communicator, attempt.agreement_record);
@@ -406,6 +424,98 @@ build_collectively_agreed_local_phase_graph(const MPI_Comm communicator, PhaseGr
         return std::unexpected(std::move(errors));
     }
     return std::move(attempt.result);
+}
+
+/** \brief Pair local compatibility errors with the exact record used for rank agreement. */
+struct LocalCompatibilityAttempt {
+    /** \brief Structured compatibility outcomes compared exactly across ranks. */
+    AgreementRecord agreement_record;
+
+    /** \brief Local rejection and caught-exception diagnostics. */
+    PhaseGraphErrors errors;
+};
+
+/** \brief Format complete phase and interface context around one compatibility outcome. */
+[[nodiscard]] std::string format_compatibility_error(const LocalPhase& minus_phase, const LocalPhase& plus_phase,
+                                                     const LocalInterface& interface, const std::string_view outcome)
+{
+    return std::format(
+        "interface '{}' (operator '{}') between minus phase '{}' (physics '{}') and plus phase '{}' (physics '{}') {}",
+        interface.specification.name, interface.specification.operator_key.value(), minus_phase.specification.name,
+        minus_phase.specification.physics_key.value(), plus_phase.specification.name,
+        plus_phase.specification.physics_key.value(), outcome);
+}
+
+/** \brief Invoke every compatibility test locally and record its exact outcome. */
+[[nodiscard]] LocalCompatibilityAttempt evaluate_interface_compatibility(const LocalPhaseGraphCandidate& candidate,
+                                                                         InterfaceCompatibilityTest& compatibility_test)
+{
+    LocalCompatibilityAttempt attempt{.agreement_record = {"rift.phase_graph.compatibility.v1"}, .errors = {}};
+    append_integer(attempt.agreement_record, candidate.interfaces.size());
+
+    for (const auto& interface : candidate.interfaces) {
+        const auto& minus_phase = candidate.phases.at(interface.minus_phase.value());
+        const auto& plus_phase = candidate.phases.at(interface.plus_phase.value());
+        append_integer(attempt.agreement_record, interface.id.value());
+
+        try {
+            auto decision =
+                compatibility_test(minus_phase.specification, plus_phase.specification, interface.specification);
+            if (decision.has_value()) {
+                attempt.agreement_record.emplace_back("accepted");
+                continue;
+            }
+
+            attempt.agreement_record.emplace_back("rejected");
+            attempt.agreement_record.push_back(decision.error());
+            add_error(attempt.errors, PhaseGraphErrorCode::incompatible_interface,
+                      format_compatibility_error(minus_phase, plus_phase, interface,
+                                                 std::format("was rejected: {}", decision.error())));
+        }
+        catch (const std::exception& exception) {
+            attempt.agreement_record.emplace_back("exception");
+            attempt.agreement_record.emplace_back("std::exception");
+            attempt.agreement_record.emplace_back(exception.what());
+            add_error(attempt.errors, PhaseGraphErrorCode::compatibility_test_exception,
+                      format_compatibility_error(minus_phase, plus_phase, interface,
+                                                 std::format("compatibility test threw: {}", exception.what())));
+        }
+        catch (...) {
+            attempt.agreement_record.emplace_back("exception");
+            attempt.agreement_record.emplace_back("non-standard");
+            add_error(attempt.errors, PhaseGraphErrorCode::compatibility_test_exception,
+                      format_compatibility_error(minus_phase, plus_phase, interface,
+                                                 "compatibility test threw a non-standard exception"));
+        }
+    }
+    return attempt;
+}
+
+/** \brief Return a local candidate only when every rank reports identical compatibility outcomes. */
+[[maybe_unused, nodiscard]] LocalPhaseGraphResult
+build_collectively_compatible_local_phase_graph(const MPI_Comm communicator, PhaseGraphSpecification specification,
+                                                InterfaceCompatibilityTest compatibility_test)
+{
+    auto candidate_result = build_collectively_agreed_local_phase_graph(communicator, std::move(specification),
+                                                                        static_cast<bool>(compatibility_test));
+    if (!candidate_result.has_value()) {
+        return std::unexpected(std::move(candidate_result.error()));
+    }
+
+    auto candidate = std::move(candidate_result).value();
+    auto compatibility = evaluate_interface_compatibility(candidate, compatibility_test);
+    const auto mismatching_rank = find_first_mismatching_rank(communicator, compatibility.agreement_record);
+    if (mismatching_rank.has_value()) {
+        PhaseGraphErrors errors;
+        add_error(
+            errors, PhaseGraphErrorCode::collective_compatibility_mismatch,
+            std::format("interface compatibility outcomes on rank {} differ from rank 0", mismatching_rank.value()));
+        return std::unexpected(std::move(errors));
+    }
+    if (!compatibility.errors.empty()) {
+        return std::unexpected(std::move(compatibility.errors));
+    }
+    return candidate;
 }
 
 } // namespace
