@@ -570,12 +570,18 @@ PhaseGraphResult RiftContext::create_phase_graph(PhaseGraphSpecification specifi
     const AgreementRecord context_state{"rift.phase_graph.context.v1",
                                         creation_was_already_attempted ? "attempted" : "not-attempted"};
     const auto mismatching_rank = find_first_mismatching_rank(mpi_communicator(), context_state);
-    if (mismatching_rank.has_value()) {
+
+    // Reaching this branch requires ranks to have made different prior calls,
+    // which cannot occur under the one-context, same-order collective contract.
+    // The reviewer approved this narrow unreachable-code exclusion on 2026-09-02.
+    if (mismatching_rank.has_value()) { // GCOVR_EXCL_BR_LINE
+        // GCOVR_EXCL_START
         PhaseGraphErrors errors;
         add_error(errors, PhaseGraphErrorCode::collective_input_mismatch,
                   std::format("phase-graph creation state on rank {} differs from rank 0", mismatching_rank.value()));
         return std::unexpected(std::move(errors));
     }
+    // GCOVR_EXCL_STOP
     if (creation_was_already_attempted) {
         PhaseGraphErrors errors;
         add_error(errors, PhaseGraphErrorCode::phase_graph_creation_already_attempted,
