@@ -3,9 +3,10 @@
 ## Current scope
 
 - Rift is a C++23 research library for sharp-interface multiphase flow.
-- This branch is a clean-slate re-foundation. The implemented public surface is
-  currently limited to the semantic version API in `include/rift/version.hpp`.
-  Do not present designs in local architecture notes as implemented behavior.
+- This branch is a clean-slate re-foundation. The implemented public surface
+  currently includes the semantic version API, the world-only `RiftContext`,
+  and canonical immutable phase-graph construction and lookup. Do not present
+  later designs in local architecture notes as implemented behavior.
 - The scientific dependency stack is deal.II 9.8.0, simdutf 9.0.0, p4est 2.8.7,
   zlib 1.3.1, and MPI. Unit tests use Boost.UT 2.3.1, and Sourcey 3.6.5 builds the
   documentation.
@@ -20,7 +21,8 @@
   ./scripts/install_dependencies.sh --check
   ```
 
-- Dependency installation writes only under `.dependencies/`. It is expensive,
+- Dependency installation writes only under `.dependencies/` or an explicitly
+  selected project-local prefix such as `.dependencies-gcc/`. It is expensive,
   may download archives, and may run `npm ci`; do not run it merely for
   discovery or without the user's approval.
 - Configure, build, and test Debug with:
@@ -70,27 +72,39 @@
 - Coverage scope is first-party code under `include/rift/` and `src/`.
 - Required line, function, and branch coverage are each 100 percent for
   in-scope work. Coverage is a gate, not evidence that test oracles are strong.
-- The supported coverage path is GCC `--coverage` instrumentation plus gcovr
-  8.6. It produces one Cobertura file for Codecov:
+- Create the ignored project-local coverage environment with:
 
   ```console
-  cmake -S . -B build/coverage -G Ninja \
-    -DCMAKE_BUILD_TYPE=Debug \
-    -DBUILD_TESTING=ON \
-    -DENABLE_SANITIZERS=OFF \
-    -DENABLE_COVERAGE=ON
-  cmake --build build/coverage --parallel 6
-  ctest --test-dir build/coverage --output-on-failure
-  gcovr --root . \
-    --filter 'include/rift/' \
-    --filter 'src/' \
-    --print-summary \
-    --fail-under-line 100 \
-    --fail-under-function 100 \
-    --fail-under-branch 100 \
-    --cobertura-pretty \
-    --output coverage.xml \
-    build/coverage
+  python3 -m venv .venv
+  .venv/bin/python -m pip install gcovr==8.6
+  ```
+
+- The supported coverage commands are compiler-specific presets wrapped by one
+  script. GCC uses an isolated GCC-built deal.II stack under
+  `.dependencies-gcc/`, writes Cobertura to
+  `build/gcc-coverage/coverage.xml`, and enforces 100 percent line, function,
+  and branch coverage through gcovr 8.6. Clang uses LLVM source-based coverage,
+  writes `build/clang-coverage/coverage-summary.json`, and enforces the same
+  three metrics:
+
+  ```console
+  ./scripts/run_coverage.sh gcc
+  ./scripts/run_coverage.sh clang
+  ```
+
+- Build the isolated GCC scientific dependencies once, with the system OpenMPI
+  wrappers selected consistently across C, C++, Fortran, and the launcher:
+
+  ```console
+  env -u CMAKE_PREFIX_PATH -u LD_LIBRARY_PATH -u PETSC_DIR -u PETSC_ARCH \
+    CC=/usr/bin/gcc CXX=/usr/bin/g++ FC=/usr/bin/gfortran \
+    OMPI_CC=/usr/bin/gcc OMPI_CXX=/usr/bin/g++ OMPI_FC=/usr/bin/gfortran \
+    MPI_C_COMPILER=/usr/bin/mpicc.openmpi \
+    MPI_CXX_COMPILER=/usr/bin/mpicxx.openmpi \
+    MPI_Fortran_COMPILER=/usr/bin/mpif90.openmpi \
+    MPIEXEC_EXECUTABLE=/usr/bin/mpiexec.openmpi \
+    ./scripts/install_dependencies.sh --prefix .dependencies-gcc \
+      --science-only --variant debug --jobs 6
   ```
 
 - `.github/workflows/ci.yml` runs the full GCC and Clang unit-test matrix on

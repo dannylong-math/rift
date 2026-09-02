@@ -83,13 +83,23 @@ endif()
 add_library(rift_coverage INTERFACE)
 option(ENABLE_COVERAGE "Instrument tests for code coverage" OFF)
 if(ENABLE_COVERAGE)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(rift_coverage INTERFACE
             --coverage
             -O0
             -g
         )
         target_link_options(rift_coverage INTERFACE --coverage)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(rift_coverage INTERFACE
+            -fprofile-instr-generate
+            -fcoverage-mapping
+            -O0
+            -g
+        )
+        target_link_options(rift_coverage INTERFACE
+            -fprofile-instr-generate
+        )
     else()
         message(FATAL_ERROR "ENABLE_COVERAGE requires GCC or Clang")
     endif()

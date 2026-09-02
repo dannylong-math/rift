@@ -20,6 +20,8 @@ INSTALL_DOCS=true
 CHECK_ONLY=false
 JOBS=""
 SCIENCE_VARIANT="all"
+MPI_FC=""
+MPI_EXECUTABLE=""
 
 usage() {
     printf '%s\n' \
@@ -133,6 +135,13 @@ find_mpi_compilers() {
 
     MPI_CC="$(command -v "${c_candidate}")"
     MPI_CXX="$(command -v "${cxx_candidate}")"
+
+    if [[ -n "${MPI_Fortran_COMPILER:-}" ]]; then
+        MPI_FC="$(command -v "${MPI_Fortran_COMPILER}")"
+    fi
+    if [[ -n "${MPIEXEC_EXECUTABLE:-}" ]]; then
+        MPI_EXECUTABLE="$(command -v "${MPIEXEC_EXECUTABLE}")"
+    fi
 }
 
 check_prerequisites() {
@@ -145,6 +154,12 @@ check_prerequisites() {
         find_mpi_compilers
         printf 'MPI C wrapper:   %s\n' "${MPI_CC}"
         printf 'MPI C++ wrapper: %s\n' "${MPI_CXX}"
+        if [[ -n "${MPI_FC}" ]]; then
+            printf 'MPI Fortran wrapper: %s\n' "${MPI_FC}"
+        fi
+        if [[ -n "${MPI_EXECUTABLE}" ]]; then
+            printf 'MPI launcher:    %s\n' "${MPI_EXECUTABLE}"
+        fi
     fi
 
     if [[ "${INSTALL_DOCS}" == true ]]; then
@@ -332,6 +347,17 @@ install_dealii_variant() {
     local p4est_prefix="${INSTALL_DIR}/p4est/${variant}"
     local zlib_prefix="${INSTALL_DIR}/zlib"
     local package_config="${prefix}/lib/cmake/deal.II/deal.IIConfig.cmake"
+    local mpi_cmake_options=(
+        "-DMPI_C_COMPILER=${MPI_CC}"
+        "-DMPI_CXX_COMPILER=${MPI_CXX}"
+    )
+
+    if [[ -n "${MPI_FC}" ]]; then
+        mpi_cmake_options+=("-DMPI_Fortran_COMPILER=${MPI_FC}")
+    fi
+    if [[ -n "${MPI_EXECUTABLE}" ]]; then
+        mpi_cmake_options+=("-DMPIEXEC_EXECUTABLE=${MPI_EXECUTABLE}")
+    fi
 
     if [[ "${variant}" == "debug" ]]; then
         cmake_build_type="Debug"
@@ -354,8 +380,7 @@ install_dealii_variant() {
             -DCMAKE_INSTALL_PREFIX="${prefix}" \
             -DCMAKE_PREFIX_PATH="${p4est_prefix};${zlib_prefix}" \
             -DCMAKE_INSTALL_RPATH="${p4est_prefix}/lib;${zlib_prefix}/lib" \
-            -DMPI_C_COMPILER="${MPI_CC}" \
-            -DMPI_CXX_COMPILER="${MPI_CXX}" \
+            "${mpi_cmake_options[@]}" \
             -DP4EST_DIR="${p4est_prefix}" \
             -DZLIB_DIR="${zlib_prefix}" \
             -DZLIB_ROOT="${zlib_prefix}" \
