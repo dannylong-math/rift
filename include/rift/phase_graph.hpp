@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <expected>
 #include <functional>
+#include <memory>
 #include <rift/strong_id.hpp>
 #include <string>
 #include <string_view>
@@ -15,6 +16,8 @@
 #include <vector>
 
 namespace rift {
+
+class RiftContext;
 
 /**
  * \defgroup phase_graph Runtime phase graph
@@ -236,6 +239,8 @@ enum class PhaseGraphErrorCode : std::uint8_t {
     incompatible_interface,
     /** \brief The compatibility query threw while examining an interface. */
     compatibility_test_exception,
+    /** \brief Phase-graph creation was requested after the context's single attempt. */
+    phase_graph_creation_already_attempted,
     /** \brief Canonical graph input or local status differs across world ranks. */
     collective_input_mismatch,
     /** \brief Compatibility acceptance or rejection differs across world ranks. */
@@ -259,5 +264,54 @@ struct PhaseGraphError {
  * \ingroup phase_graph
  */
 using PhaseGraphErrors = std::vector<PhaseGraphError>;
+
+/**
+ * \brief Immutable canonical phase graph owned by one Rift context.
+ *
+ * Construction is available only through `RiftContext::create_phase_graph()`.
+ * Consumers borrow this object from its context; it cannot be copied, moved,
+ * or assigned.
+ *
+ * \ingroup phase_graph
+ */
+class PhaseGraph {
+public:
+    /** \brief Destroy the private immutable graph storage. */
+    ~PhaseGraph();
+
+    /** \brief Copy construction is disabled because the context is the sole owner. */
+    PhaseGraph(const PhaseGraph&) = delete;
+
+    /** \brief Copy assignment is disabled because the context is the sole owner. */
+    PhaseGraph& operator=(const PhaseGraph&) = delete;
+
+    /** \brief Move construction is disabled to keep borrowed references stable. */
+    PhaseGraph(PhaseGraph&&) = delete;
+
+    /** \brief Move assignment is disabled to keep borrowed references stable. */
+    PhaseGraph& operator=(PhaseGraph&&) = delete;
+
+private:
+    /** \brief Opaque canonical phase and interface storage. */
+    struct Storage;
+
+    /** \brief Adopt collectively agreed immutable storage. */
+    explicit PhaseGraph(std::unique_ptr<const Storage> storage);
+
+    /** \brief Immutable storage owned for this graph's entire lifetime. */
+    std::unique_ptr<const Storage> storage_;
+
+    friend class RiftContext;
+};
+
+/**
+ * \brief Result of the context's single collective graph-creation attempt.
+ *
+ * A successful value borrows the context-owned immutable graph. The reference
+ * remains valid until the owning `RiftContext` is destroyed.
+ *
+ * \ingroup phase_graph
+ */
+using PhaseGraphResult = std::expected<std::reference_wrapper<const PhaseGraph>, PhaseGraphErrors>;
 
 } // namespace rift

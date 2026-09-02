@@ -10,11 +10,14 @@
 #include <exception>
 #include <expected>
 #include <format>
+#include <functional>
 #include <map>
+#include <memory>
 #include <mpi.h>
 #include <optional>
 #include <ranges>
 #include <rift/phase_graph.hpp>
+#include <rift/rift_context.hpp>
 #include <simdutf.h> // NOLINT(misc-include-cleaner): simdutf's public umbrella owns this declaration.
 #include <string>
 #include <string_view>
@@ -24,6 +27,44 @@
 #include <vector>
 
 namespace rift {
+
+/** \brief Opaque canonical storage owned by a published phase graph. */
+struct PhaseGraph::Storage {
+    /** \brief One canonical phase and its assigned ID. */
+    struct PhaseRecord {
+        /** \brief Contiguous canonical phase identifier. */
+        PhaseId id;
+
+        /** \brief Owning canonical phase specification. */
+        PhaseSpecification specification;
+    };
+
+    /** \brief One canonical interface, its endpoints, and its assigned ID. */
+    struct InterfaceRecord {
+        /** \brief Contiguous canonical interface identifier. */
+        InterfaceId id;
+
+        /** \brief Resolved identifier of the declared minus phase. */
+        PhaseId minus_phase;
+
+        /** \brief Resolved identifier of the declared plus phase. */
+        PhaseId plus_phase;
+
+        /** \brief Owning canonical interface specification. */
+        InterfaceSpecification specification;
+    };
+
+    /** \brief Canonically ordered phases. */
+    std::vector<PhaseRecord> phases;
+
+    /** \brief Canonically ordered interfaces. */
+    std::vector<InterfaceRecord> interfaces;
+};
+
+PhaseGraph::PhaseGraph(std::unique_ptr<const Storage> storage) : storage_(std::move(storage)) {}
+
+PhaseGraph::~PhaseGraph() = default;
+
 namespace {
 
 /** \brief Test whether a string contains well-formed UTF-8. */
@@ -492,7 +533,7 @@ struct LocalCompatibilityAttempt {
 }
 
 /** \brief Return a local candidate only when every rank reports identical compatibility outcomes. */
-[[maybe_unused, nodiscard]] LocalPhaseGraphResult
+[[nodiscard]] LocalPhaseGraphResult
 build_collectively_compatible_local_phase_graph(const MPI_Comm communicator, PhaseGraphSpecification specification,
                                                 InterfaceCompatibilityTest compatibility_test)
 {
@@ -519,4 +560,51 @@ build_collectively_compatible_local_phase_graph(const MPI_Comm communicator, Pha
 }
 
 } // namespace
+
+PhaseGraphResult RiftContext::create_phase_graph(PhaseGraphSpecification specification,
+                                                 InterfaceCompatibilityTest compatibility_test)
+{
+    const auto creation_was_already_attempted = phase_graph_creation_attempted_;
+    phase_graph_creation_attempted_ = true;
+
+    const AgreementRecord context_state{"rift.phase_graph.context.v1",
+                                        creation_was_already_attempted ? "attempted" : "not-attempted"};
+    const auto mismatching_rank = find_first_mismatching_rank(mpi_communicator(), context_state);
+    if (mismatching_rank.has_value()) {
+        PhaseGraphErrors errors;
+        add_error(errors, PhaseGraphErrorCode::collective_input_mismatch,
+                  std::format("phase-graph creation state on rank {} differs from rank 0", mismatching_rank.value()));
+        return std::unexpected(std::move(errors));
+    }
+    if (creation_was_already_attempted) {
+        PhaseGraphErrors errors;
+        add_error(errors, PhaseGraphErrorCode::phase_graph_creation_already_attempted,
+                  "this RiftContext has already consumed its single phase-graph creation attempt");
+        return std::unexpected(std::move(errors));
+    }
+
+    auto candidate_result = build_collectively_compatible_local_phase_graph(
+        mpi_communicator(), std::move(specification), std::move(compatibility_test));
+    if (!candidate_result.has_value()) {
+        return std::unexpected(std::move(candidate_result.error()));
+    }
+
+    auto candidate = std::move(candidate_result).value();
+    auto storage = std::make_unique<PhaseGraph::Storage>();
+    storage->phases.reserve(candidate.phases.size());
+    for (auto& phase : candidate.phases) {
+        storage->phases.push_back({.id = phase.id, .specification = std::move(phase.specification)});
+    }
+    storage->interfaces.reserve(candidate.interfaces.size());
+    for (auto& interface : candidate.interfaces) {
+        storage->interfaces.push_back({.id = interface.id,
+                                       .minus_phase = interface.minus_phase,
+                                       .plus_phase = interface.plus_phase,
+                                       .specification = std::move(interface.specification)});
+    }
+
+    phase_graph_ = std::unique_ptr<const PhaseGraph>{new PhaseGraph(std::move(storage))};
+    return std::cref(*phase_graph_);
+}
+
 } // namespace rift

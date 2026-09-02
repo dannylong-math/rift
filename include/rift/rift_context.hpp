@@ -6,6 +6,8 @@
  */
 
 #include <deal.II/base/mpi.h>
+#include <memory>
+#include <rift/phase_graph.hpp>
 
 namespace rift {
 
@@ -74,6 +76,8 @@ public:
      *
      * \return borrowed `MPI_COMM_WORLD`; the caller must never free it.
      */
+    // The live context makes the MPI-lifetime precondition explicit.
+    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
     [[nodiscard]] MPI_Comm mpi_communicator() const noexcept { return MPI_COMM_WORLD; }
 
     /**
@@ -96,11 +100,34 @@ public:
         return dealii::Utilities::MPI::n_mpi_processes(mpi_communicator());
     }
 
+    /**
+     * \brief Collectively create and own this context's canonical phase graph.
+     *
+     * Every rank in `mpi_communicator()` must call this member in the same
+     * order. The first call consumes the context's only graph-creation attempt,
+     * whether it succeeds or returns configuration errors.
+     *
+     * \param specification unresolved phase and interface input owned by this
+     * call.
+     * \param compatibility_test local compatibility policy invoked in
+     * canonical interface order after structural agreement.
+     * \return a borrowed reference to the context-owned immutable graph, or
+     * collected coherent errors on every participating rank.
+     */
+    [[nodiscard]] PhaseGraphResult create_phase_graph(PhaseGraphSpecification specification,
+                                                      InterfaceCompatibilityTest compatibility_test);
+
 private:
     /**
      * \brief RAII owner of deal.II, p4est, and MPI initialization state.
      */
     dealii::Utilities::MPI::MPI_InitFinalize mpi_lifetime_;
+
+    /** \brief Whether the context's single graph-creation attempt was consumed. */
+    bool phase_graph_creation_attempted_ = false;
+
+    /** \brief Canonical graph destroyed before the MPI lifetime ends. */
+    std::unique_ptr<const PhaseGraph> phase_graph_;
 };
 
 } // namespace rift
