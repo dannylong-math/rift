@@ -30,40 +30,73 @@ namespace rift {
 
 /** \brief Opaque canonical storage owned by a published phase graph. */
 struct PhaseGraph::Storage {
-    /** \brief One canonical phase and its assigned ID. */
-    struct PhaseRecord {
-        /** \brief Contiguous canonical phase identifier. */
-        PhaseId id;
-
-        /** \brief Owning canonical phase specification. */
-        PhaseSpecification specification;
-    };
-
-    /** \brief One canonical interface, its endpoints, and its assigned ID. */
-    struct InterfaceRecord {
-        /** \brief Contiguous canonical interface identifier. */
-        InterfaceId id;
-
-        /** \brief Resolved identifier of the declared minus phase. */
-        PhaseId minus_phase;
-
-        /** \brief Resolved identifier of the declared plus phase. */
-        PhaseId plus_phase;
-
-        /** \brief Owning canonical interface specification. */
-        InterfaceSpecification specification;
-    };
-
     /** \brief Canonically ordered phases. */
-    std::vector<PhaseRecord> phases;
+    std::vector<PhaseDescriptor> phases;
 
     /** \brief Canonically ordered interfaces. */
-    std::vector<InterfaceRecord> interfaces;
+    std::vector<InterfaceDescriptor> interfaces;
 };
 
 PhaseGraph::PhaseGraph(std::unique_ptr<const Storage> storage) : storage_(std::move(storage)) {}
 
 PhaseGraph::~PhaseGraph() = default;
+
+std::span<const PhaseDescriptor> PhaseGraph::phases() const noexcept
+{
+    return {storage_->phases.data(), storage_->phases.size()};
+}
+
+std::span<const InterfaceDescriptor> PhaseGraph::interfaces() const noexcept
+{
+    return {storage_->interfaces.data(), storage_->interfaces.size()};
+}
+
+const PhaseDescriptor& PhaseGraph::phase(const PhaseId id) const { return storage_->phases.at(id.value()); }
+
+const InterfaceDescriptor& PhaseGraph::material_interface(const InterfaceId id) const
+{
+    return storage_->interfaces.at(id.value());
+}
+
+std::optional<PhaseId> PhaseGraph::find_phase(const std::string_view name) const noexcept
+{
+    const auto position = std::ranges::lower_bound(
+        storage_->phases, name, {}, [](const PhaseDescriptor& phase) { return std::string_view{phase.name}; });
+    if (position == storage_->phases.end() || std::string_view{position->name} != name) {
+        return std::nullopt;
+    }
+    return position->id;
+}
+
+std::optional<InterfaceId> PhaseGraph::find_interface(const std::string_view name) const noexcept
+{
+    const auto position =
+        std::ranges::lower_bound(storage_->interfaces, name, {},
+                                 [](const InterfaceDescriptor& interface) { return std::string_view{interface.name}; });
+    if (position == storage_->interfaces.end() || std::string_view{position->name} != name) {
+        return std::nullopt;
+    }
+    return position->id;
+}
+
+std::optional<InterfaceId> PhaseGraph::find_interface(const PhaseId first, const PhaseId second) const noexcept
+{
+    if (first == second || first.value() >= storage_->phases.size() || second.value() >= storage_->phases.size()) {
+        return std::nullopt;
+    }
+
+    const auto first_endpoint = std::min(first.value(), second.value());
+    const auto second_endpoint = std::max(first.value(), second.value());
+    const auto position =
+        std::ranges::find_if(storage_->interfaces, [first_endpoint, second_endpoint](const auto& interface) {
+            return std::min(interface.minus_phase.value(), interface.plus_phase.value()) == first_endpoint &&
+                   std::max(interface.minus_phase.value(), interface.plus_phase.value()) == second_endpoint;
+        });
+    if (position == storage_->interfaces.end()) {
+        return std::nullopt;
+    }
+    return position->id;
+}
 
 namespace {
 
@@ -599,14 +632,17 @@ PhaseGraphResult RiftContext::create_phase_graph(PhaseGraphSpecification specifi
     auto storage = std::make_unique<PhaseGraph::Storage>();
     storage->phases.reserve(candidate.phases.size());
     for (auto& phase : candidate.phases) {
-        storage->phases.push_back({.id = phase.id, .specification = std::move(phase.specification)});
+        storage->phases.push_back({.id = phase.id,
+                                   .name = std::move(phase.specification.name),
+                                   .physics_key = std::move(phase.specification.physics_key)});
     }
     storage->interfaces.reserve(candidate.interfaces.size());
     for (auto& interface : candidate.interfaces) {
         storage->interfaces.push_back({.id = interface.id,
+                                       .name = std::move(interface.specification.name),
                                        .minus_phase = interface.minus_phase,
                                        .plus_phase = interface.plus_phase,
-                                       .specification = std::move(interface.specification)});
+                                       .operator_key = std::move(interface.specification.operator_key)});
     }
 
     phase_graph_ = std::unique_ptr<const PhaseGraph>{new PhaseGraph(std::move(storage))};

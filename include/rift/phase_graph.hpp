@@ -9,7 +9,9 @@
 #include <expected>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <rift/strong_id.hpp>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -161,6 +163,51 @@ struct PhaseGraphSpecification {
 };
 
 /**
+ * \brief Describe one phase in the published canonical graph.
+ *
+ * The graph owns its descriptors and exposes them only through const views.
+ * A copied descriptor owns its name and registry key independently.
+ *
+ * \ingroup phase_graph
+ */
+struct PhaseDescriptor {
+    /** \brief Contiguous canonical phase identifier. */
+    PhaseId id;
+
+    /** \brief Unique configuration name. */
+    std::string name;
+
+    /** \brief Registry key selecting this phase's compiled physics family. */
+    PhysicsKey physics_key;
+};
+
+/**
+ * \brief Describe one oriented interface in the published canonical graph.
+ *
+ * The resolved phase identifiers preserve the declared minus-to-plus
+ * orientation. The graph owns its descriptors and exposes them only through
+ * const views.
+ *
+ * \ingroup phase_graph
+ */
+struct InterfaceDescriptor {
+    /** \brief Contiguous canonical interface identifier. */
+    InterfaceId id;
+
+    /** \brief Unique configuration name. */
+    std::string name;
+
+    /** \brief Resolved identifier of the declared minus phase. */
+    PhaseId minus_phase;
+
+    /** \brief Resolved identifier of the declared plus phase. */
+    PhaseId plus_phase;
+
+    /** \brief Registry key selecting the complete pairwise interface law. */
+    InterfaceOperatorKey operator_key;
+};
+
+/**
  * \brief Type that indicates whether an interface is accepted.
  *
  * A value accepts the interface. An `std::unexpected<std::string>` rejects it;
@@ -276,6 +323,66 @@ using PhaseGraphErrors = std::vector<PhaseGraphError>;
  */
 class PhaseGraph {
 public:
+    /**
+     * \brief Read every phase in ascending canonical ID order.
+     *
+     * \return borrowed immutable view valid for this graph's lifetime.
+     */
+    [[nodiscard]] std::span<const PhaseDescriptor> phases() const noexcept;
+
+    /**
+     * \brief Read every interface in ascending canonical ID order.
+     *
+     * \return borrowed immutable view valid for this graph's lifetime.
+     */
+    [[nodiscard]] std::span<const InterfaceDescriptor> interfaces() const noexcept;
+
+    /**
+     * \brief Resolve a phase ID in constant time.
+     *
+     * \param id canonical phase identifier.
+     * \return immutable graph-owned phase descriptor.
+     * \throws std::out_of_range when `id` is absent from this graph.
+     */
+    [[nodiscard]] const PhaseDescriptor& phase(PhaseId id) const;
+
+    /**
+     * \brief Resolve an interface ID in constant time.
+     *
+     * \param id canonical interface identifier.
+     * \return immutable graph-owned interface descriptor.
+     * \throws std::out_of_range when `id` is absent from this graph.
+     */
+    [[nodiscard]] const InterfaceDescriptor& material_interface(InterfaceId id) const;
+
+    /**
+     * \brief Find a phase by its exact configuration name.
+     *
+     * \param name phase name to match.
+     * \return canonical phase ID, or no value when the name is absent.
+     */
+    [[nodiscard]] std::optional<PhaseId> find_phase(std::string_view name) const noexcept;
+
+    /**
+     * \brief Find an interface by its exact configuration name.
+     *
+     * \param name interface name to match.
+     * \return canonical interface ID, or no value when the name is absent.
+     */
+    [[nodiscard]] std::optional<InterfaceId> find_interface(std::string_view name) const noexcept;
+
+    /**
+     * \brief Find the sole interface joining an unordered phase pair.
+     *
+     * The returned descriptor retains its declared minus-to-plus orientation.
+     *
+     * \param first either incident phase.
+     * \param second the other incident phase.
+     * \return canonical interface ID, or no value for an identical, invalid,
+     * nonadjacent pair.
+     */
+    [[nodiscard]] std::optional<InterfaceId> find_interface(PhaseId first, PhaseId second) const noexcept;
+
     /** \brief Destroy the private immutable graph storage. */
     ~PhaseGraph();
 
