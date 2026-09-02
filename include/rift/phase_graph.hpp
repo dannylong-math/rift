@@ -5,8 +5,9 @@
  * \brief Value types used to configure and diagnose Rift's phase graph.
  */
 
-#include <compare>
 #include <cstdint>
+#include <expected>
+#include <functional>
 #include <rift/strong_id.hpp>
 #include <string>
 #include <string_view>
@@ -138,6 +139,64 @@ struct InterfaceSpecification {
     /** \brief Registry key selecting the complete pairwise interface law. */
     InterfaceOperatorKey operator_key;
 };
+
+/**
+ * \brief Own all unresolved input needed to construct one canonical phase graph.
+ *
+ * This in an intermediate type and not intended to have a long lifetime.
+ * This collects information parsed on a particular MPI rank and is passed
+ * to a function that tests if all MPI ranks have the same configuration.
+ *
+ * \ingroup phase_graph
+ */
+struct PhaseGraphSpecification {
+    /** \brief Named phase specifications in arbitrary declaration order. */
+    std::vector<PhaseSpecification> phases;
+
+    /** \brief Oriented interface specifications in arbitrary declaration order. */
+    std::vector<InterfaceSpecification> interfaces;
+};
+
+/**
+ * \brief Type that indicates whether an interface is accepted.
+ *
+ * A value accepts the interface. An `std::unexpected<std::string>` rejects it;
+ * Relevant specification fields are included in the rejection message.
+ *
+ * \ingroup phase_graph
+ */
+using InterfaceCompatibilityDecision = std::expected<void, std::string>;
+
+/**
+ * \brief Function type that tests whether an interface is compatible.
+ *
+ * The first two arguments are the resolved minus- and plus-phase
+ * specifications, respectively. The third argument is the relevant interface specification.
+ * This returns @ref InterfaceCompatibilityDecision, which indicates whether the interface is accepted or rejected.
+ *
+ * \ingroup phase_graph
+ */
+using InterfaceCompatibilityTest = std::function<InterfaceCompatibilityDecision(
+    const PhaseSpecification&, const PhaseSpecification&, const InterfaceSpecification&)>;
+
+/** \brief Explicit application-independent interface compatibility policies. */
+namespace interface_compatibility {
+
+/**
+ * \brief Accept every structurally valid interface configuration.
+ *
+ * Use this policy when there are no particular restrictions on the interface operator and phase physics families.
+ *
+ * \return an accepting compatibility decision.
+ * \ingroup phase_graph
+ */
+[[nodiscard]] inline InterfaceCompatibilityDecision accept_all(const PhaseSpecification& /* minus_phase */, const PhaseSpecification& /* plus_phase */,
+                                                               const InterfaceSpecification& /* interface */) noexcept
+{
+    return {};
+}
+
+} // namespace interface_compatibility
 
 /**
  * \brief Classify a recoverable phase-graph configuration defect.
