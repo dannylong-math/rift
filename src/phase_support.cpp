@@ -20,6 +20,7 @@
 #include <format>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mpi.h>
 #include <optional>
@@ -442,6 +443,22 @@ struct LocalClosureTopology {
     std::vector<std::vector<std::size_t>> fine_side_groups;
 };
 
+/** \brief Describe phase bits a ghost copy requests on its owning cell. */
+struct GhostActivationRequest {
+    dealii::CellId::binary_type cell{};
+    std::vector<std::uint64_t> phase_flags;
+
+    /** \brief Serialize one compact cell request for point-to-point exchange. */
+    template<class Archive> void serialize(Archive& archive, const unsigned int /*version*/)
+    {
+        archive & cell;
+        archive & phase_flags;
+    }
+};
+
+/** \brief Packed requests sent from one rank to one owning rank. */
+using GhostActivationBuffer = std::vector<GhostActivationRequest>;
+
 /** \brief Find one known cell in the deterministic local closure table. */
 [[nodiscard]] std::size_t find_cell_index(const LocalClosureTopology& topology, const dealii::CellId& id)
 {
@@ -511,10 +528,27 @@ struct LocalPhaseSupportState {
     std::size_t phase_count;
     std::size_t blocks_per_cell;
     std::vector<std::uint64_t> phase_flags;
+    std::vector<unsigned int> ghost_owner_ranks;
+    std::vector<unsigned int> activation_sender_ranks;
+    std::map<unsigned int, GhostActivationBuffer> pending_ghost_activations;
 };
 
 /** \brief Number of phase flags stored in one fixed-width communication block. */
 constexpr std::size_t phase_flags_per_block = std::numeric_limits<std::uint64_t>::digits;
+
+/** \brief Find owners of ghost cells that participate in local closure. */
+[[nodiscard]] std::vector<unsigned int> find_relevant_ghost_owners(const LocalClosureTopology& topology)
+{
+    std::vector<unsigned int> owners;
+    for (const auto& cell : topology.cells) {
+        if (!cell.locally_owned && cell.participates_in_closure) {
+            owners.push_back(cell.owner_rank);
+        }
+    }
+    std::ranges::sort(owners);
+    owners.erase(std::ranges::unique(owners).begin(), owners.end());
+    return owners;
+}
 
 /** \brief Activate every validated owner-local requested phase flag. */
 void activate_requested_cells(LocalPhaseSupportState& state,
@@ -540,10 +574,18 @@ make_local_phase_support_state(const MeshSnapshot<dim>& mesh,
 {
     auto topology = build_local_closure_topology(mesh);
     const auto blocks_per_cell = (phase_count + phase_flags_per_block - 1) / phase_flags_per_block;
+    auto ghost_owner_ranks = find_relevant_ghost_owners(topology);
+    auto activation_sender_ranks =
+        dealii::Utilities::MPI::compute_point_to_point_communication_pattern(mesh.communicator(), ghost_owner_ranks);
+    std::ranges::sort(activation_sender_ranks);
+    activation_sender_ranks.erase(std::ranges::unique(activation_sender_ranks).begin(), activation_sender_ranks.end());
     LocalPhaseSupportState state{.topology = std::move(topology),
                                  .phase_count = phase_count,
                                  .blocks_per_cell = blocks_per_cell,
-                                 .phase_flags = {}};
+                                 .phase_flags = {},
+                                 .ghost_owner_ranks = std::move(ghost_owner_ranks),
+                                 .activation_sender_ranks = std::move(activation_sender_ranks),
+                                 .pending_ghost_activations = {}};
     state.phase_flags.resize(state.topology.cells.size() * blocks_per_cell, 0);
     activate_requested_cells(state, specifications);
     return state;
@@ -594,14 +636,28 @@ template<int dim>
         return copy_phase_flags(state, find_cell_index(state.topology, cell->id()));
     };
 
+    state.pending_ghost_activations.clear();
+    for (const auto owner : state.ghost_owner_ranks) {
+        state.pending_ghost_activations.emplace(owner, GhostActivationBuffer{});
+    }
+
     bool changed = false;
     const auto unpack = [&state, &changed](const ActiveCellIterator& cell, const PackedPhaseFlags& owner_flags) {
         const auto cell_index = find_cell_index(state.topology, cell->id());
+        std::vector<std::uint64_t> requested_flags(state.blocks_per_cell, 0);
+        bool request_needed = false;
         for (std::size_t block = 0; block < state.blocks_per_cell; ++block) {
             auto& ghost_flags = state.phase_flags[cell_index * state.blocks_per_cell + block];
             const auto added_flags = owner_flags[block] & ~ghost_flags;
+            requested_flags[block] = ghost_flags & ~owner_flags[block];
+            request_needed = request_needed || requested_flags[block] != 0;
             ghost_flags |= owner_flags[block];
             changed = changed || added_flags != 0;
+        }
+        if (request_needed) {
+            const auto owner = state.topology.cells[cell_index].owner_rank;
+            state.pending_ghost_activations.at(owner).push_back(
+                {.cell = cell->id().template to_binary<dim>(), .phase_flags = std::move(requested_flags)});
         }
     };
 
@@ -611,6 +667,51 @@ template<int dim>
 
     dealii::GridTools::exchange_cell_data_to_ghosts<PackedPhaseFlags>(mesh.triangulation(), pack, unpack,
                                                                       request_relevant_ghost);
+    return changed;
+}
+
+/** \brief Private MPI tag for packed ghost activation requests. */
+constexpr unsigned int ghost_activation_mpi_tag = 27341;
+
+/** \brief Return ghost-discovered phase activations to their owning ranks. */
+[[nodiscard]] bool send_ghost_activations_to_owners(const MPI_Comm communicator, LocalPhaseSupportState& state)
+{
+    for (auto& [owner, requests] : state.pending_ghost_activations) {
+        static_cast<void>(owner);
+        std::ranges::sort(requests, {}, &GhostActivationRequest::cell);
+    }
+
+    std::vector<dealii::Utilities::MPI::Future<GhostActivationBuffer>> receives;
+    receives.reserve(state.activation_sender_ranks.size());
+    for (const auto sender : state.activation_sender_ranks) {
+        receives.push_back(
+            dealii::Utilities::MPI::irecv<GhostActivationBuffer>(communicator, sender, ghost_activation_mpi_tag));
+    }
+
+    std::vector<dealii::Utilities::MPI::Future<void>> sends;
+    sends.reserve(state.ghost_owner_ranks.size());
+    for (const auto owner : state.ghost_owner_ranks) {
+        sends.push_back(dealii::Utilities::MPI::isend(state.pending_ghost_activations.at(owner), communicator, owner,
+                                                      ghost_activation_mpi_tag));
+    }
+
+    bool changed = false;
+    for (auto& receive : receives) {
+        for (auto& request : receive.get()) {
+            const auto cell = dealii::CellId{request.cell};
+            const auto cell_index = find_cell_index(state.topology, cell);
+            for (std::size_t block = 0; block < state.blocks_per_cell; ++block) {
+                auto& owner_flags = state.phase_flags[cell_index * state.blocks_per_cell + block];
+                const auto added_flags = request.phase_flags[block] & ~owner_flags;
+                owner_flags |= request.phase_flags[block];
+                changed = changed || added_flags != 0;
+            }
+        }
+    }
+    for (auto& send : sends) {
+        send.wait();
+    }
+    state.pending_ghost_activations.clear();
     return changed;
 }
 
@@ -638,6 +739,8 @@ make_locally_saturated_phase_support(const MeshSnapshot<dim>& mesh,
 [[maybe_unused]] constexpr auto publish_owner_phase_flags_to_ghosts_2d = &publish_owner_phase_flags_to_ghosts<2>;
 /** \brief Compile both owner-publication paths before factory integration. */
 [[maybe_unused]] constexpr auto publish_owner_phase_flags_to_ghosts_3d = &publish_owner_phase_flags_to_ghosts<3>;
+/** \brief Compile the sparse reverse exchange before factory integration. */
+[[maybe_unused]] constexpr auto send_ghost_activations_to_owners_path = &send_ghost_activations_to_owners;
 
 } // namespace
 
