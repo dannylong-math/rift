@@ -18,6 +18,7 @@
 #include <expected>
 #include <format>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <mpi.h>
 #include <optional>
@@ -426,10 +427,166 @@ validate_phase_support_inputs(const MPI_Comm communicator, const unsigned int ra
     return ValidatedPhaseSupportInputs<dim>{.mesh = std::move(mesh), .specifications = std::move(specifications)};
 }
 
+/** \brief Describe one active owner or ghost cell in deterministic local order. */
+struct LocalClosureCell {
+    dealii::CellId id;
+    unsigned int owner_rank;
+    bool locally_owned;
+};
+
+/** \brief Store mesh-local fine-side groups as indices into one cell table. */
+struct LocalClosureTopology {
+    std::vector<LocalClosureCell> cells;
+    std::vector<std::vector<std::size_t>> fine_side_groups;
+};
+
+/** \brief Find one known cell in the deterministic local closure table. */
+[[nodiscard]] std::size_t find_cell_index(const LocalClosureTopology& topology, const dealii::CellId& id)
+{
+    const auto position =
+        std::ranges::lower_bound(topology.cells, id, CellIdLess{},
+                                 [](const LocalClosureCell& cell) -> const dealii::CellId& { return cell.id; });
+    return static_cast<std::size_t>(std::distance(topology.cells.begin(), position));
+}
+
+/** \brief Build locally visible nonperiodic hanging-face closure relations. */
+template<int dim> [[nodiscard]] LocalClosureTopology build_local_closure_topology(const MeshSnapshot<dim>& mesh)
+{
+    LocalClosureTopology topology;
+    const auto& triangulation = mesh.triangulation();
+    for (const auto& cell : triangulation.active_cell_iterators()) {
+        if (!cell->is_artificial()) {
+            topology.cells.push_back({.id = cell->id(),
+                                      .owner_rank = static_cast<unsigned int>(cell->subdomain_id()),
+                                      .locally_owned = cell->is_locally_owned()});
+        }
+    }
+    std::ranges::sort(topology.cells, [](const LocalClosureCell& left, const LocalClosureCell& right) {
+        return CellIdLess{}(left.id, right.id);
+    });
+
+    for (const auto& coarse_cell : triangulation.active_cell_iterators()) {
+        if (coarse_cell->is_artificial()) {
+            continue;
+        }
+        for (const auto face : coarse_cell->face_indices()) {
+            if (coarse_cell->at_boundary(face) || !coarse_cell->face(face)->has_children()) {
+                continue;
+            }
+
+            std::vector<std::size_t> group;
+            const auto subface_count = coarse_cell->face(face)->n_active_descendants();
+            group.reserve(subface_count);
+            for (unsigned int subface = 0; subface < subface_count; ++subface) {
+                const auto fine_cell = coarse_cell->neighbor_child_on_subface(face, subface);
+                if (!fine_cell->is_artificial()) {
+                    group.push_back(find_cell_index(topology, fine_cell->id()));
+                }
+            }
+            std::ranges::sort(group);
+            group.erase(std::ranges::unique(group).begin(), group.end());
+            if (group.size() > 1) {
+                topology.fine_side_groups.push_back(std::move(group));
+            }
+        }
+    }
+
+    std::ranges::sort(topology.fine_side_groups);
+    topology.fine_side_groups.erase(std::ranges::unique(topology.fine_side_groups).begin(),
+                                    topology.fine_side_groups.end());
+    return topology;
+}
+
+/** \brief Hold packed phase flags on the locally relevant active-cell table. */
+struct LocalPhaseSupportState {
+    LocalClosureTopology topology;
+    std::size_t phase_count;
+    std::size_t blocks_per_cell;
+    std::vector<std::uint64_t> phase_flags;
+};
+
+/** \brief Number of phase flags stored in one fixed-width communication block. */
+constexpr std::size_t phase_flags_per_block = std::numeric_limits<std::uint64_t>::digits;
+
+/** \brief Activate every validated owner-local requested phase flag. */
+void activate_requested_cells(LocalPhaseSupportState& state,
+                              const std::vector<PhaseSupportSpecification>& specifications) noexcept
+{
+    for (const auto& specification : specifications) {
+        const auto phase = static_cast<std::size_t>(specification.phase.value());
+        const auto block = phase / phase_flags_per_block;
+        const auto mask = std::uint64_t{1} << (phase % phase_flags_per_block);
+        for (const auto& cell : specification.requested_cells) {
+            const auto cell_index = find_cell_index(state.topology, cell);
+            state.phase_flags[cell_index * state.blocks_per_cell + block] |= mask;
+        }
+    }
+}
+
+/** \brief Create packed local state from validated canonical specifications. */
+template<int dim>
+[[nodiscard]] LocalPhaseSupportState
+make_local_phase_support_state(const MeshSnapshot<dim>& mesh,
+                               const std::vector<PhaseSupportSpecification>& specifications,
+                               const std::size_t phase_count)
+{
+    auto topology = build_local_closure_topology(mesh);
+    const auto blocks_per_cell = (phase_count + phase_flags_per_block - 1) / phase_flags_per_block;
+    LocalPhaseSupportState state{.topology = std::move(topology),
+                                 .phase_count = phase_count,
+                                 .blocks_per_cell = blocks_per_cell,
+                                 .phase_flags = {}};
+    state.phase_flags.resize(state.topology.cells.size() * blocks_per_cell, 0);
+    activate_requested_cells(state, specifications);
+    return state;
+}
+
+/** \brief Saturate all phases over the locally visible fine-side groups. */
+[[nodiscard]] bool saturate_local_phase_support(LocalPhaseSupportState& state) noexcept
+{
+    bool changed_any = false;
+    bool changed_this_sweep = false;
+    do {
+        changed_this_sweep = false;
+        for (const auto& group : state.topology.fine_side_groups) {
+            for (std::size_t block = 0; block < state.blocks_per_cell; ++block) {
+                std::uint64_t group_flags = 0;
+                for (const auto cell : group) {
+                    group_flags |= state.phase_flags[cell * state.blocks_per_cell + block];
+                }
+                for (const auto cell : group) {
+                    auto& cell_flags = state.phase_flags[cell * state.blocks_per_cell + block];
+                    const auto added_flags = group_flags & ~cell_flags;
+                    cell_flags |= group_flags;
+                    changed_this_sweep = changed_this_sweep || added_flags != 0;
+                }
+            }
+        }
+        changed_any = changed_any || changed_this_sweep;
+    } while (changed_this_sweep);
+    return changed_any;
+}
+
+/** \brief Build and locally saturate one validated support-construction state. */
+template<int dim>
+[[nodiscard]] LocalPhaseSupportState
+make_locally_saturated_phase_support(const MeshSnapshot<dim>& mesh,
+                                     const std::vector<PhaseSupportSpecification>& specifications,
+                                     const std::size_t phase_count)
+{
+    auto state = make_local_phase_support_state(mesh, specifications, phase_count);
+    static_cast<void>(saturate_local_phase_support(state));
+    return state;
+}
+
 /** \brief Compile both supported validation paths before factory integration. */
 [[maybe_unused]] constexpr auto validate_phase_support_inputs_2d = &validate_phase_support_inputs<2>;
 /** \brief Compile both supported validation paths before factory integration. */
 [[maybe_unused]] constexpr auto validate_phase_support_inputs_3d = &validate_phase_support_inputs<3>;
+/** \brief Compile both supported local-closure paths before factory integration. */
+[[maybe_unused]] constexpr auto make_locally_saturated_phase_support_2d = &make_locally_saturated_phase_support<2>;
+/** \brief Compile both supported local-closure paths before factory integration. */
+[[maybe_unused]] constexpr auto make_locally_saturated_phase_support_3d = &make_locally_saturated_phase_support<3>;
 
 } // namespace
 
