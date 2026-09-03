@@ -15,6 +15,7 @@
 #include <deal.II/base/mpi.h>
 #include <deal.II/base/numbers.h>
 #include <deal.II/grid/cell_id.h>
+#include <deal.II/grid/grid_tools.h>
 #include <expected>
 #include <format>
 #include <iterator>
@@ -432,6 +433,7 @@ struct LocalClosureCell {
     dealii::CellId id;
     unsigned int owner_rank;
     bool locally_owned;
+    bool participates_in_closure;
 };
 
 /** \brief Store mesh-local fine-side groups as indices into one cell table. */
@@ -458,7 +460,8 @@ template<int dim> [[nodiscard]] LocalClosureTopology build_local_closure_topolog
         if (!cell->is_artificial()) {
             topology.cells.push_back({.id = cell->id(),
                                       .owner_rank = static_cast<unsigned int>(cell->subdomain_id()),
-                                      .locally_owned = cell->is_locally_owned()});
+                                      .locally_owned = cell->is_locally_owned(),
+                                      .participates_in_closure = false});
         }
     }
     std::ranges::sort(topology.cells, [](const LocalClosureCell& left, const LocalClosureCell& right) {
@@ -494,6 +497,11 @@ template<int dim> [[nodiscard]] LocalClosureTopology build_local_closure_topolog
     std::ranges::sort(topology.fine_side_groups);
     topology.fine_side_groups.erase(std::ranges::unique(topology.fine_side_groups).begin(),
                                     topology.fine_side_groups.end());
+    for (const auto& group : topology.fine_side_groups) {
+        for (const auto cell : group) {
+            topology.cells[cell].participates_in_closure = true;
+        }
+    }
     return topology;
 }
 
@@ -567,6 +575,45 @@ make_local_phase_support_state(const MeshSnapshot<dim>& mesh,
     return changed_any;
 }
 
+/** \brief Copy one cell's complete packed phase-support payload. */
+[[nodiscard]] std::vector<std::uint64_t> copy_phase_flags(const LocalPhaseSupportState& state, const std::size_t cell)
+{
+    const auto first = state.phase_flags.begin() + static_cast<std::ptrdiff_t>(cell * state.blocks_per_cell);
+    return {first, first + static_cast<std::ptrdiff_t>(state.blocks_per_cell)};
+}
+
+/** \brief Publish relevant owner flags to ghost copies in one batched exchange. */
+template<int dim>
+[[nodiscard]] bool publish_owner_phase_flags_to_ghosts(const MeshSnapshot<dim>& mesh, LocalPhaseSupportState& state)
+{
+    using PackedPhaseFlags = std::vector<std::uint64_t>;
+    using Triangulation = dealii::parallel::distributed::Triangulation<dim>;
+    using ActiveCellIterator = typename Triangulation::active_cell_iterator;
+
+    const auto pack = [&state](const ActiveCellIterator& cell) -> PackedPhaseFlags {
+        return copy_phase_flags(state, find_cell_index(state.topology, cell->id()));
+    };
+
+    bool changed = false;
+    const auto unpack = [&state, &changed](const ActiveCellIterator& cell, const PackedPhaseFlags& owner_flags) {
+        const auto cell_index = find_cell_index(state.topology, cell->id());
+        for (std::size_t block = 0; block < state.blocks_per_cell; ++block) {
+            auto& ghost_flags = state.phase_flags[cell_index * state.blocks_per_cell + block];
+            const auto added_flags = owner_flags[block] & ~ghost_flags;
+            ghost_flags |= owner_flags[block];
+            changed = changed || added_flags != 0;
+        }
+    };
+
+    const auto request_relevant_ghost = [&state](const ActiveCellIterator& cell) {
+        return state.topology.cells[find_cell_index(state.topology, cell->id())].participates_in_closure;
+    };
+
+    dealii::GridTools::exchange_cell_data_to_ghosts<PackedPhaseFlags>(mesh.triangulation(), pack, unpack,
+                                                                      request_relevant_ghost);
+    return changed;
+}
+
 /** \brief Build and locally saturate one validated support-construction state. */
 template<int dim>
 [[nodiscard]] LocalPhaseSupportState
@@ -587,6 +634,10 @@ make_locally_saturated_phase_support(const MeshSnapshot<dim>& mesh,
 [[maybe_unused]] constexpr auto make_locally_saturated_phase_support_2d = &make_locally_saturated_phase_support<2>;
 /** \brief Compile both supported local-closure paths before factory integration. */
 [[maybe_unused]] constexpr auto make_locally_saturated_phase_support_3d = &make_locally_saturated_phase_support<3>;
+/** \brief Compile both owner-publication paths before factory integration. */
+[[maybe_unused]] constexpr auto publish_owner_phase_flags_to_ghosts_2d = &publish_owner_phase_flags_to_ghosts<2>;
+/** \brief Compile both owner-publication paths before factory integration. */
+[[maybe_unused]] constexpr auto publish_owner_phase_flags_to_ghosts_3d = &publish_owner_phase_flags_to_ghosts<3>;
 
 } // namespace
 
