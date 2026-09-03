@@ -107,7 +107,8 @@ endif()
 
 option(ENABLE_CLANG_TIDY "Run clang-tidy during compilation" OFF)
 if(ENABLE_CLANG_TIDY)
-    find_program(CLANG_TIDY_EXE NAMES clang-tidy REQUIRED)
+    string(REGEX MATCH "^[0-9]+" CLANG_TIDY_COMPILER_MAJOR "${CMAKE_CXX_COMPILER_VERSION}")
+    find_program(CLANG_TIDY_EXE NAMES "clang-tidy-${CLANG_TIDY_COMPILER_MAJOR}" clang-tidy REQUIRED)
     set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")
 endif()
 

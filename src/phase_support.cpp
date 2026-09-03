@@ -5,15 +5,15 @@
 
 #include <algorithm>
 #include <array>
-#include <boost/serialization/array.hpp>
-#include <boost/serialization/string.hpp>
-#include <boost/serialization/vector.hpp>
+#include <boost/serialization/array.hpp>  // IWYU pragma: keep
+#include <boost/serialization/string.hpp> // IWYU pragma: keep
+#include <boost/serialization/vector.hpp> // IWYU pragma: keep
 #include <cstddef>
 #include <cstdint>
 #include <deal.II/base/geometry_info.h>
 #include <deal.II/base/mpi.h>
 #include <deal.II/base/mpi.templates.h>
-#include <deal.II/base/numbers.h>
+#include <deal.II/base/types.h>
 #include <deal.II/grid/cell_id.h>
 #include <deal.II/grid/grid_tools.h>
 #include <expected>
@@ -24,6 +24,8 @@
 #include <mpi.h>
 #include <optional>
 #include <ranges>
+#include <rift/mesh_snapshot.hpp>
+#include <rift/phase_graph.hpp>
 #include <rift/phase_support.hpp>
 #include <rift/rift_context.hpp>
 #include <span>
@@ -110,11 +112,7 @@ template<int dim> [[nodiscard]] std::string format_cell_id(const dealii::CellId&
 void add_error(PhaseSupportErrors& errors, const PhaseSupportErrorCode code, const unsigned int rank,
                std::optional<PhaseId> phase, std::optional<dealii::CellId> cell, std::string message)
 {
-    errors.push_back({.code = code,
-                      .rank = rank,
-                      .phase = std::move(phase),
-                      .cell = std::move(cell),
-                      .message = std::move(message)});
+    errors.push_back({.code = code, .rank = rank, .phase = phase, .cell = cell, .message = std::move(message)});
 }
 
 /** \brief Order public errors by their approved structured diagnostic fields. */
@@ -132,6 +130,8 @@ void add_error(PhaseSupportErrors& errors, const PhaseSupportErrorCode code, con
     if (!left.cell.has_value()) {
         return false;
     }
+    // Equal prefixes guarantee that the right-hand cell subject is present.
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     return CellIdLess{}(*left.cell, *right.cell);
 }
 
@@ -141,6 +141,8 @@ void add_error(PhaseSupportErrors& errors, const PhaseSupportErrorCode code, con
     if (left.rank != right.rank || left.code != right.code || left.phase != right.phase) {
         return false;
     }
+    // Rift-generated errors with equal codes and phases have the same subject shape.
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     return !left.cell.has_value() || same_cell_id(*left.cell, *right.cell);
 }
 
@@ -206,7 +208,7 @@ struct PhaseSupportFailurePacket {
     return {.code = static_cast<PhaseSupportErrorCode>(error.code),
             .rank = error.rank,
             .phase = error.has_phase ? std::optional{PhaseId::from_index(error.phase)} : std::nullopt,
-            .cell = error.has_cell ? std::optional{std::move(error.cell)} : std::nullopt,
+            .cell = error.has_cell ? std::optional{error.cell} : std::nullopt,
             .message = std::move(error.message)};
 }
 
@@ -236,7 +238,7 @@ void validate_phase_specifications(const PhaseGraph* phase_graph,
     for (const auto& specification : specifications) {
         const auto phase_index = static_cast<std::size_t>(specification.phase.value());
         if (phase_index < phase_count) {
-            ++specification_counts[phase_index];
+            ++specification_counts.at(phase_index);
         }
         else {
             add_error(errors, PhaseSupportErrorCode::unknown_phase, rank, specification.phase, std::nullopt,
@@ -247,15 +249,15 @@ void validate_phase_specifications(const PhaseGraph* phase_graph,
 
     for (std::size_t phase_index = 0; phase_index < phase_count; ++phase_index) {
         const auto phase = PhaseId::from_index(static_cast<PhaseId::representation_type>(phase_index));
-        if (specification_counts[phase_index] == 0) {
+        if (specification_counts.at(phase_index) == 0) {
             add_error(errors, PhaseSupportErrorCode::missing_phase_specification, rank, phase, std::nullopt,
                       std::format("rank {} supplied no specification for phase {} ({})", rank, phase.value(),
                                   phase_graph->phase(phase).name));
         }
-        else if (specification_counts[phase_index] > 1) {
+        else if (specification_counts.at(phase_index) > 1) {
             add_error(errors, PhaseSupportErrorCode::duplicate_phase_specification, rank, phase, std::nullopt,
                       std::format("rank {} supplied {} specifications for phase {} ({})", rank,
-                                  specification_counts[phase_index], phase.value(), phase_graph->phase(phase).name));
+                                  specification_counts.at(phase_index), phase.value(), phase_graph->phase(phase).name));
         }
     }
 }
@@ -274,8 +276,8 @@ void validate_requested_cells(const std::shared_ptr<const MeshSnapshot<dim>>& me
     for (const auto& specification : specifications) {
         const auto& cells = specification.requested_cells;
         for (std::size_t index = 0; index < cells.size(); ++index) {
-            const auto& cell_id = cells[index];
-            if (index > 0 && same_cell_id(cells[index - 1], cell_id)) {
+            const auto& cell_id = cells.at(index);
+            if (index > 0 && same_cell_id(cells.at(index - 1), cell_id)) {
                 add_error(errors, PhaseSupportErrorCode::duplicate_requested_cell, rank, specification.phase, cell_id,
                           std::format("rank {} phase {} repeats requested cell {}", rank, specification.phase.value(),
                                       format_cell_id<dim>(cell_id)));
@@ -344,7 +346,7 @@ struct PhaseSupportValidationExtrema {
 [[nodiscard]] bool validation_failed(const PhaseSupportValidationExtrema& extrema) noexcept
 {
     return extrema.minimum != extrema.maximum ||
-           extrema.minimum[field_index(PhaseSupportValidationField::local_inputs_valid)] == 0;
+           extrema.minimum.at(field_index(PhaseSupportValidationField::local_inputs_valid)) == 0;
 }
 
 /** \brief Gather full diagnostics only after a fixed reduction reports failure. */
@@ -364,9 +366,9 @@ struct PhaseSupportValidationExtrema {
         }
     }
 
-    const auto rank_zero_dimension = packets.front().record[field_index(PhaseSupportValidationField::dimension)];
+    const auto rank_zero_dimension = packets.front().record.at(field_index(PhaseSupportValidationField::dimension));
     for (std::size_t rank_index = 1; rank_index < packets.size(); ++rank_index) {
-        const auto dimension = packets[rank_index].record[field_index(PhaseSupportValidationField::dimension)];
+        const auto dimension = packets.at(rank_index).record.at(field_index(PhaseSupportValidationField::dimension));
         if (dimension != rank_zero_dimension) {
             const auto rank = static_cast<unsigned int>(rank_index);
             add_error(errors, PhaseSupportErrorCode::dimension_mismatch, rank, std::nullopt, std::nullopt,
@@ -376,15 +378,15 @@ struct PhaseSupportValidationExtrema {
     }
 
     const auto reference = std::ranges::find_if(packets, [](const PhaseSupportFailurePacket& packet) {
-        return packet.record[field_index(PhaseSupportValidationField::has_mesh)] != 0;
+        return packet.record.at(field_index(PhaseSupportValidationField::has_mesh)) != 0;
     });
     if (reference != packets.end()) {
         const auto reference_rank = static_cast<unsigned int>(std::distance(packets.begin(), reference));
-        const auto reference_id = reference->record[field_index(PhaseSupportValidationField::mesh_snapshot_id)];
+        const auto reference_id = reference->record.at(field_index(PhaseSupportValidationField::mesh_snapshot_id));
         for (std::size_t rank_index = 0; rank_index < packets.size(); ++rank_index) {
-            const auto& record = packets[rank_index].record;
-            const auto mesh_is_present = record[field_index(PhaseSupportValidationField::has_mesh)] != 0;
-            const auto mesh_id = record[field_index(PhaseSupportValidationField::mesh_snapshot_id)];
+            const auto& record = packets.at(rank_index).record;
+            const auto mesh_is_present = record.at(field_index(PhaseSupportValidationField::has_mesh)) != 0;
+            const auto mesh_id = record.at(field_index(PhaseSupportValidationField::mesh_snapshot_id));
             if (mesh_is_present && mesh_id != reference_id) {
                 const auto rank = static_cast<unsigned int>(rank_index);
                 add_error(errors, PhaseSupportErrorCode::mesh_snapshot_mismatch, rank, std::nullopt, std::nullopt,
@@ -411,7 +413,7 @@ using PhaseSupportValidationResult = std::expected<ValidatedPhaseSupportInputs<d
 /** \brief Validate and canonicalize all factory inputs with a bounded success path. */
 template<int dim>
 [[maybe_unused]] PhaseSupportValidationResult<dim>
-validate_phase_support_inputs(const MPI_Comm communicator, const unsigned int rank, const PhaseGraph* phase_graph,
+validate_phase_support_inputs(const MPI_Comm communicator, const PhaseGraph* phase_graph, const unsigned int rank,
                               std::shared_ptr<const MeshSnapshot<dim>> mesh,
                               std::vector<PhaseSupportSpecification> specifications)
 {
@@ -500,7 +502,7 @@ template<int dim> [[nodiscard]] LocalClosureTopology build_local_closure_topolog
                                     topology.fine_side_groups.end());
     for (const auto& group : topology.fine_side_groups) {
         for (const auto cell : group) {
-            topology.cells[cell].participates_in_closure = true;
+            topology.cells.at(cell).participates_in_closure = true;
         }
     }
     return topology;
@@ -509,7 +511,6 @@ template<int dim> [[nodiscard]] LocalClosureTopology build_local_closure_topolog
 /** \brief Hold packed phase flags on the locally relevant active-cell table. */
 struct LocalPhaseSupportState {
     LocalClosureTopology topology;
-    std::size_t phase_count;
     std::size_t blocks_per_cell;
     std::vector<std::uint64_t> phase_flags;
     std::vector<unsigned int> ghost_owner_ranks;
@@ -542,7 +543,7 @@ void activate_requested_cells(LocalPhaseSupportState& state,
         const auto mask = std::uint64_t{1} << (phase % phase_flags_per_block);
         for (const auto& cell : specification.requested_cells) {
             const auto cell_index = find_cell_index(state.topology, cell);
-            state.phase_flags[cell_index * state.blocks_per_cell + block] |= mask;
+            state.phase_flags.at((cell_index * state.blocks_per_cell) + block) |= mask;
         }
     }
 }
@@ -558,7 +559,6 @@ make_local_phase_support_state(const MeshSnapshot<dim>& mesh,
     const auto blocks_per_cell = (phase_count + phase_flags_per_block - 1) / phase_flags_per_block;
     auto ghost_owner_ranks = find_relevant_ghost_owners(topology);
     LocalPhaseSupportState state{.topology = std::move(topology),
-                                 .phase_count = phase_count,
                                  .blocks_per_cell = blocks_per_cell,
                                  .phase_flags = {},
                                  .ghost_owner_ranks = std::move(ghost_owner_ranks)};
@@ -570,26 +570,26 @@ make_local_phase_support_state(const MeshSnapshot<dim>& mesh,
 /** \brief Saturate all phases over the locally visible fine-side groups. */
 [[nodiscard]] bool saturate_local_phase_support(LocalPhaseSupportState& state) noexcept
 {
-    bool changed_any = false;
-    bool changed_this_sweep = false;
-    do {
-        changed_this_sweep = false;
+    auto changed_any = false;
+    auto sweep_required = true;
+    while (sweep_required) {
+        sweep_required = false;
         for (const auto& group : state.topology.fine_side_groups) {
             for (std::size_t block = 0; block < state.blocks_per_cell; ++block) {
                 std::uint64_t group_flags = 0;
                 for (const auto cell : group) {
-                    group_flags |= state.phase_flags[cell * state.blocks_per_cell + block];
+                    group_flags |= state.phase_flags.at((cell * state.blocks_per_cell) + block);
                 }
                 for (const auto cell : group) {
-                    auto& cell_flags = state.phase_flags[cell * state.blocks_per_cell + block];
+                    auto& cell_flags = state.phase_flags.at((cell * state.blocks_per_cell) + block);
                     const auto added_flags = group_flags & ~cell_flags;
                     cell_flags |= group_flags;
-                    changed_this_sweep = changed_this_sweep || added_flags != 0;
+                    sweep_required = sweep_required || added_flags != 0;
                 }
             }
         }
-        changed_any = changed_any || changed_this_sweep;
-    } while (changed_this_sweep);
+        changed_any = changed_any || sweep_required;
+    }
     return changed_any;
 }
 
@@ -613,7 +613,7 @@ template<int dim>
 {
     using PackedPhaseFlags = std::vector<std::uint64_t>;
     using Triangulation = dealii::parallel::distributed::Triangulation<dim>;
-    using ActiveCellIterator = typename Triangulation::active_cell_iterator;
+    using ActiveCellIterator = Triangulation::active_cell_iterator;
 
     const auto pack = [&state](const ActiveCellIterator& cell) -> PackedPhaseFlags {
         return copy_phase_flags(state, find_cell_index(state.topology, cell->id()));
@@ -623,15 +623,16 @@ template<int dim>
     const auto unpack = [&state, &changed](const ActiveCellIterator& cell, const PackedPhaseFlags& owner_flags) {
         const auto cell_index = find_cell_index(state.topology, cell->id());
         for (std::size_t block = 0; block < state.blocks_per_cell; ++block) {
-            auto& ghost_flags = state.phase_flags[cell_index * state.blocks_per_cell + block];
-            const auto added_flags = owner_flags[block] & ~ghost_flags;
-            ghost_flags |= owner_flags[block];
+            auto& ghost_flags = state.phase_flags.at((cell_index * state.blocks_per_cell) + block);
+            const auto owner_block_flags = owner_flags.at(block);
+            const auto added_flags = owner_block_flags & ~ghost_flags;
+            ghost_flags |= owner_block_flags;
             changed = changed || added_flags != 0;
         }
     };
 
     const auto request_relevant_ghost = [&state](const ActiveCellIterator& cell) {
-        return state.topology.cells[find_cell_index(state.topology, cell->id())].participates_in_closure;
+        return state.topology.cells.at(find_cell_index(state.topology, cell->id())).participates_in_closure;
     };
 
     dealii::GridTools::exchange_cell_data_to_ghosts<PackedPhaseFlags>(mesh.triangulation(), pack, unpack,
@@ -646,12 +647,13 @@ template<int dim>
 }
 
 /** \brief Test one phase bit on one locally indexed active cell. */
-[[nodiscard]] bool phase_is_supported(const LocalPhaseSupportState& state, const std::size_t cell,
-                                      const std::size_t phase) noexcept
+[[nodiscard]] bool phase_is_supported(const LocalPhaseSupportState& state, const PhaseId phase,
+                                      const std::size_t cell) noexcept
 {
-    const auto block = phase / phase_flags_per_block;
-    const auto mask = std::uint64_t{1} << (phase % phase_flags_per_block);
-    return (state.phase_flags[cell * state.blocks_per_cell + block] & mask) != 0;
+    const auto phase_index = static_cast<std::size_t>(phase.value());
+    const auto block = phase_index / phase_flags_per_block;
+    const auto mask = std::uint64_t{1} << (phase_index % phase_flags_per_block);
+    return (state.phase_flags.at((cell * state.blocks_per_cell) + block) & mask) != 0;
 }
 
 /** \brief Compute the complete distributed least fixed point for all phases. */
@@ -662,13 +664,13 @@ close_distributed_phase_support(const MeshSnapshot<dim>& mesh,
                                 const std::size_t phase_count)
 {
     auto state = make_local_phase_support_state(mesh, specifications, phase_count);
-    bool globally_changed = false;
-    do {
+    auto globally_changed = true;
+    while (globally_changed) {
         const auto local_closure_changed = saturate_local_phase_support(state);
         const auto ghost_publication_changed = publish_owner_phase_flags_to_ghosts(mesh, state);
         const auto locally_changed = local_closure_changed || ghost_publication_changed;
         globally_changed = any_rank_changed(mesh.communicator(), locally_changed);
-    } while (globally_changed);
+    }
     return state;
 }
 
@@ -726,7 +728,7 @@ template<int dim>
 PhaseSupportResult<dim> RiftContext::create_phase_supports(std::shared_ptr<const MeshSnapshot<dim>> mesh,
                                                            std::vector<PhaseSupportSpecification> specifications)
 {
-    auto validation = validate_phase_support_inputs<dim>(mpi_communicator(), this_mpi_process(), phase_graph_.get(),
+    auto validation = validate_phase_support_inputs<dim>(mpi_communicator(), phase_graph_.get(), this_mpi_process(),
                                                          std::move(mesh), std::move(specifications));
     if (!validation.has_value()) {
         return std::unexpected(std::move(validation.error()));
@@ -738,13 +740,12 @@ PhaseSupportResult<dim> RiftContext::create_phase_supports(std::shared_ptr<const
     std::vector<PhaseSupport> supports;
     supports.reserve(inputs.specifications.size());
     for (auto& specification : inputs.specifications) {
-        const auto phase = static_cast<std::size_t>(specification.phase.value());
         auto cells = std::move(specification.requested_cells);
         const auto requested_count = cells.size();
 
         for (std::size_t cell = 0; cell < state.topology.cells.size(); ++cell) {
-            const auto& closure_cell = state.topology.cells[cell];
-            if (!closure_cell.locally_owned || !phase_is_supported(state, cell, phase)) {
+            const auto& closure_cell = state.topology.cells.at(cell);
+            if (!closure_cell.locally_owned || !phase_is_supported(state, specification.phase, cell)) {
                 continue;
             }
 
