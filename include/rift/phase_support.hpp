@@ -40,6 +40,21 @@ struct PhaseSupportSpecification {
  */
 class PhaseSupport {
 public:
+    /** \brief Destroy this phase's partitioned cell storage. */
+    ~PhaseSupport() = default;
+
+    /** \brief Copy construction is disabled to avoid deep cell-data copies. */
+    PhaseSupport(const PhaseSupport&) = delete;
+
+    /** \brief Copy assignment is disabled to avoid deep cell-data copies. */
+    PhaseSupport& operator=(const PhaseSupport&) = delete;
+
+    /** \brief Move construction transfers this phase's complete support. */
+    PhaseSupport(PhaseSupport&&) noexcept = default;
+
+    /** \brief Move assignment transfers this phase's complete support. */
+    PhaseSupport& operator=(PhaseSupport&&) noexcept = default;
+
     /** \brief Return the canonical phase described by this support. */
     [[nodiscard]] PhaseId phase_id() const noexcept { return phase_; }
 
