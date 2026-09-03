@@ -5,8 +5,10 @@
  * \brief Process-wide Rift simulation context.
  */
 
+#include <cstdint>
 #include <deal.II/base/mpi.h>
 #include <memory>
+#include <rift/mesh_snapshot.hpp>
 #include <rift/phase_graph.hpp>
 
 namespace rift {
@@ -117,6 +119,25 @@ public:
     [[nodiscard]] PhaseGraphResult create_phase_graph(PhaseGraphSpecification specification,
                                                       InterfaceCompatibilityTest compatibility_test);
 
+    /**
+     * \brief Collectively create an immutable distributed mesh snapshot.
+     *
+     * Every world rank must call this member in the same order with the same
+     * supported dimension. The call consumes both resource pointers on every
+     * result and publishes no snapshot when any rank supplies invalid input.
+     *
+     * \tparam dim volume-mesh dimension; only 2 and 3 are supported.
+     * \param triangulation completed distributed triangulation to adopt.
+     * \param mapping object describing polynomial mapping from reference to physical cells.
+     * \return a shared immutable snapshot or coherent ordered errors on every
+     * rank.
+     */
+    template<int dim>
+        requires(dim == 2 || dim == 3)
+    [[nodiscard]] MeshSnapshotResult<dim>
+    create_mesh_snapshot(std::unique_ptr<dealii::parallel::distributed::Triangulation<dim>> triangulation,
+                         std::unique_ptr<dealii::Mapping<dim>> mapping);
+
 private:
     /**
      * \brief RAII owner of deal.II, p4est, and MPI initialization state.
@@ -128,6 +149,9 @@ private:
 
     /** \brief Canonical graph destroyed before the MPI lifetime ends. */
     std::unique_ptr<const PhaseGraph> phase_graph_;
+
+    /** \brief Next context-local identity for a successfully published mesh. */
+    std::uint64_t next_mesh_snapshot_index_ = 0;
 };
 
 } // namespace rift
