@@ -10,9 +10,9 @@
 #include <boost/serialization/vector.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <deal.II/base/exceptions.h>
 #include <deal.II/base/geometry_info.h>
 #include <deal.II/base/mpi.h>
+#include <deal.II/base/mpi.templates.h>
 #include <deal.II/base/numbers.h>
 #include <deal.II/grid/cell_id.h>
 #include <deal.II/grid/grid_tools.h>
@@ -20,7 +20,6 @@
 #include <format>
 #include <iterator>
 #include <limits>
-#include <map>
 #include <memory>
 #include <mpi.h>
 #include <optional>
@@ -78,8 +77,13 @@ struct CellIdLess {
 /** \brief Compare cell IDs for equality without inspecting invalid child storage. */
 [[nodiscard]] bool same_cell_id(const dealii::CellId& left, const dealii::CellId& right) noexcept
 {
-    const CellIdLess less;
-    return !less(left, right) && !less(right, left);
+    if (left.get_coarse_cell_id() != right.get_coarse_cell_id()) {
+        return false;
+    }
+    if (left.get_coarse_cell_id() == dealii::numbers::invalid_coarse_cell_id) {
+        return true;
+    }
+    return std::ranges::equal(left.get_child_indices(), right.get_child_indices());
 }
 
 /** \brief Check the dimension-dependent parts of a caller-provided cell ID. */
@@ -96,7 +100,10 @@ template<int dim> [[nodiscard]] bool is_well_formed(const dealii::CellId& cell) 
 /** \brief Format a valid cell ID or a safe placeholder for malformed input. */
 template<int dim> [[nodiscard]] std::string format_cell_id(const dealii::CellId& cell)
 {
-    return is_well_formed<dim>(cell) ? cell.to_string() : std::string{"<invalid CellId>"};
+    if (!is_well_formed<dim>(cell)) {
+        return "<invalid CellId>";
+    }
+    return cell.to_string();
 }
 
 /** \brief Append one structured rank-local phase-support error. */
@@ -131,8 +138,7 @@ void add_error(PhaseSupportErrors& errors, const PhaseSupportErrorCode code, con
 /** \brief Test whether two errors have the same machine-readable identity. */
 [[nodiscard]] bool same_error(const PhaseSupportError& left, const PhaseSupportError& right) noexcept
 {
-    if (left.rank != right.rank || left.code != right.code || left.phase != right.phase ||
-        left.cell.has_value() != right.cell.has_value()) {
+    if (left.rank != right.rank || left.code != right.code || left.phase != right.phase) {
         return false;
     }
     return !left.cell.has_value() || same_cell_id(*left.cell, *right.cell);
@@ -279,7 +285,9 @@ void validate_requested_cells(const std::shared_ptr<const MeshSnapshot<dim>>& me
                 continue;
             }
             const auto& triangulation = mesh->triangulation();
-            if (!is_well_formed<dim>(cell_id) || !triangulation.contains_cell(cell_id)) {
+            if (!is_well_formed<dim>(cell_id) ||
+                cell_id.get_coarse_cell_id() >= triangulation.n_global_coarse_cells() ||
+                !triangulation.contains_cell(cell_id)) {
                 add_error(errors, PhaseSupportErrorCode::cell_not_locally_present, rank, specification.phase, cell_id,
                           std::format("rank {} phase {} requested cell {}, which is not locally present", rank,
                                       specification.phase.value(), format_cell_id<dim>(cell_id)));
@@ -327,16 +335,8 @@ struct PhaseSupportValidationExtrema {
                                                                      const PhaseSupportValidationRecord& local_record)
 {
     PhaseSupportValidationExtrema extrema{.minimum = local_record, .maximum = local_record};
-    auto status = MPI_Allreduce(local_record.data(), extrema.minimum.data(), static_cast<int>(local_record.size()),
-                                dealii::Utilities::MPI::mpi_type_id_for_type<std::uint64_t>, MPI_MIN, communicator);
-    if (status != MPI_SUCCESS) {      // GCOVR_EXCL_BR_LINE
-        throw dealii::ExcMPI(status); // GCOVR_EXCL_LINE
-    }
-    status = MPI_Allreduce(local_record.data(), extrema.maximum.data(), static_cast<int>(local_record.size()),
-                           dealii::Utilities::MPI::mpi_type_id_for_type<std::uint64_t>, MPI_MAX, communicator);
-    if (status != MPI_SUCCESS) {      // GCOVR_EXCL_BR_LINE
-        throw dealii::ExcMPI(status); // GCOVR_EXCL_LINE
-    }
+    dealii::Utilities::MPI::min(local_record, communicator, extrema.minimum);
+    dealii::Utilities::MPI::max(local_record, communicator, extrema.maximum);
     return extrema;
 }
 
@@ -444,22 +444,6 @@ struct LocalClosureTopology {
     std::vector<std::vector<std::size_t>> fine_side_groups;
 };
 
-/** \brief Describe phase bits a ghost copy requests on its owning cell. */
-struct GhostActivationRequest {
-    dealii::CellId::binary_type cell{};
-    std::vector<std::uint64_t> phase_flags;
-
-    /** \brief Serialize one compact cell request for point-to-point exchange. */
-    template<class Archive> void serialize(Archive& archive, const unsigned int /*version*/)
-    {
-        archive & cell;
-        archive & phase_flags;
-    }
-};
-
-/** \brief Packed requests sent from one rank to one owning rank. */
-using GhostActivationBuffer = std::vector<GhostActivationRequest>;
-
 /** \brief Find one known cell in the deterministic local closure table. */
 [[nodiscard]] std::size_t find_cell_index(const LocalClosureTopology& topology, const dealii::CellId& id)
 {
@@ -506,9 +490,8 @@ template<int dim> [[nodiscard]] LocalClosureTopology build_local_closure_topolog
             }
             std::ranges::sort(group);
             group.erase(std::ranges::unique(group).begin(), group.end());
-            if (group.size() > 1) {
-                topology.fine_side_groups.push_back(std::move(group));
-            }
+            // A locally trivial group is a semantic no-op during saturation.
+            topology.fine_side_groups.push_back(std::move(group));
         }
     }
 
@@ -530,8 +513,6 @@ struct LocalPhaseSupportState {
     std::size_t blocks_per_cell;
     std::vector<std::uint64_t> phase_flags;
     std::vector<unsigned int> ghost_owner_ranks;
-    std::vector<unsigned int> activation_sender_ranks;
-    std::map<unsigned int, GhostActivationBuffer> pending_ghost_activations;
 };
 
 /** \brief Number of phase flags stored in one fixed-width communication block. */
@@ -576,17 +557,11 @@ make_local_phase_support_state(const MeshSnapshot<dim>& mesh,
     auto topology = build_local_closure_topology(mesh);
     const auto blocks_per_cell = (phase_count + phase_flags_per_block - 1) / phase_flags_per_block;
     auto ghost_owner_ranks = find_relevant_ghost_owners(topology);
-    auto activation_sender_ranks =
-        dealii::Utilities::MPI::compute_point_to_point_communication_pattern(mesh.communicator(), ghost_owner_ranks);
-    std::ranges::sort(activation_sender_ranks);
-    activation_sender_ranks.erase(std::ranges::unique(activation_sender_ranks).begin(), activation_sender_ranks.end());
     LocalPhaseSupportState state{.topology = std::move(topology),
                                  .phase_count = phase_count,
                                  .blocks_per_cell = blocks_per_cell,
                                  .phase_flags = {},
-                                 .ghost_owner_ranks = std::move(ghost_owner_ranks),
-                                 .activation_sender_ranks = std::move(activation_sender_ranks),
-                                 .pending_ghost_activations = {}};
+                                 .ghost_owner_ranks = std::move(ghost_owner_ranks)};
     state.phase_flags.resize(state.topology.cells.size() * blocks_per_cell, 0);
     activate_requested_cells(state, specifications);
     return state;
@@ -625,7 +600,14 @@ make_local_phase_support_state(const MeshSnapshot<dim>& mesh,
     return {first, first + static_cast<std::ptrdiff_t>(state.blocks_per_cell)};
 }
 
-/** \brief Publish relevant owner flags to ghost copies in one batched exchange. */
+/**
+ * \brief Publish relevant owner flags to ghost copies in one batched exchange.
+ *
+ * deal.II partitions p4est for one-level coarsening, so the fine-side cells
+ * of each closure group share one owner. That owner can compute the complete
+ * group locally; ghosts consume its authoritative flags but never originate
+ * activations that need to be returned.
+ */
 template<int dim>
 [[nodiscard]] bool publish_owner_phase_flags_to_ghosts(const MeshSnapshot<dim>& mesh, LocalPhaseSupportState& state)
 {
@@ -637,28 +619,14 @@ template<int dim>
         return copy_phase_flags(state, find_cell_index(state.topology, cell->id()));
     };
 
-    state.pending_ghost_activations.clear();
-    for (const auto owner : state.ghost_owner_ranks) {
-        state.pending_ghost_activations.emplace(owner, GhostActivationBuffer{});
-    }
-
     bool changed = false;
     const auto unpack = [&state, &changed](const ActiveCellIterator& cell, const PackedPhaseFlags& owner_flags) {
         const auto cell_index = find_cell_index(state.topology, cell->id());
-        std::vector<std::uint64_t> requested_flags(state.blocks_per_cell, 0);
-        bool request_needed = false;
         for (std::size_t block = 0; block < state.blocks_per_cell; ++block) {
             auto& ghost_flags = state.phase_flags[cell_index * state.blocks_per_cell + block];
             const auto added_flags = owner_flags[block] & ~ghost_flags;
-            requested_flags[block] = ghost_flags & ~owner_flags[block];
-            request_needed = request_needed || requested_flags[block] != 0;
             ghost_flags |= owner_flags[block];
             changed = changed || added_flags != 0;
-        }
-        if (request_needed) {
-            const auto owner = state.topology.cells[cell_index].owner_rank;
-            state.pending_ghost_activations.at(owner).push_back(
-                {.cell = cell->id().template to_binary<dim>(), .phase_flags = std::move(requested_flags)});
         }
     };
 
@@ -668,51 +636,6 @@ template<int dim>
 
     dealii::GridTools::exchange_cell_data_to_ghosts<PackedPhaseFlags>(mesh.triangulation(), pack, unpack,
                                                                       request_relevant_ghost);
-    return changed;
-}
-
-/** \brief Private MPI tag for packed ghost activation requests. */
-constexpr unsigned int ghost_activation_mpi_tag = 27341;
-
-/** \brief Return ghost-discovered phase activations to their owning ranks. */
-[[nodiscard]] bool send_ghost_activations_to_owners(const MPI_Comm communicator, LocalPhaseSupportState& state)
-{
-    for (auto& [owner, requests] : state.pending_ghost_activations) {
-        static_cast<void>(owner);
-        std::ranges::sort(requests, {}, &GhostActivationRequest::cell);
-    }
-
-    std::vector<dealii::Utilities::MPI::Future<GhostActivationBuffer>> receives;
-    receives.reserve(state.activation_sender_ranks.size());
-    for (const auto sender : state.activation_sender_ranks) {
-        receives.push_back(
-            dealii::Utilities::MPI::irecv<GhostActivationBuffer>(communicator, sender, ghost_activation_mpi_tag));
-    }
-
-    std::vector<dealii::Utilities::MPI::Future<void>> sends;
-    sends.reserve(state.ghost_owner_ranks.size());
-    for (const auto owner : state.ghost_owner_ranks) {
-        sends.push_back(dealii::Utilities::MPI::isend(state.pending_ghost_activations.at(owner), communicator, owner,
-                                                      ghost_activation_mpi_tag));
-    }
-
-    bool changed = false;
-    for (auto& receive : receives) {
-        for (auto& request : receive.get()) {
-            const auto cell = dealii::CellId{request.cell};
-            const auto cell_index = find_cell_index(state.topology, cell);
-            for (std::size_t block = 0; block < state.blocks_per_cell; ++block) {
-                auto& owner_flags = state.phase_flags[cell_index * state.blocks_per_cell + block];
-                const auto added_flags = request.phase_flags[block] & ~owner_flags;
-                owner_flags |= request.phase_flags[block];
-                changed = changed || added_flags != 0;
-            }
-        }
-    }
-    for (auto& send : sends) {
-        send.wait();
-    }
-    state.pending_ghost_activations.clear();
     return changed;
 }
 
@@ -743,8 +666,7 @@ close_distributed_phase_support(const MeshSnapshot<dim>& mesh,
     do {
         const auto local_closure_changed = saturate_local_phase_support(state);
         const auto ghost_publication_changed = publish_owner_phase_flags_to_ghosts(mesh, state);
-        const auto owner_activation_changed = send_ghost_activations_to_owners(mesh.communicator(), state);
-        const auto locally_changed = local_closure_changed || ghost_publication_changed || owner_activation_changed;
+        const auto locally_changed = local_closure_changed || ghost_publication_changed;
         globally_changed = any_rank_changed(mesh.communicator(), locally_changed);
     } while (globally_changed);
     return state;

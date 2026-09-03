@@ -76,3 +76,10 @@ if(TARGET phase_graph_agreement_test)
     add_rift_mpi_test(phase_graph_agreement_test phase_graph_agreement_test_compatibility_mismatch_3_ranks 3
         compatibility_mismatch)
 endif()
+
+if(TARGET phase_support_agreement_test)
+    add_rift_mpi_test(phase_support_agreement_test phase_support_agreement_test_no_phase_graph_1_rank 1)
+    set_tests_properties(phase_support_agreement_test_no_phase_graph_1_rank PROPERTIES
+        ENVIRONMENT "RIFT_PHASE_SUPPORT_TEST_MODE=no_phase_graph"
+    )
+endif()
