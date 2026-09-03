@@ -112,6 +112,7 @@ if(ENABLE_CLANG_TIDY)
 endif()
 
 add_library(rift STATIC
+    src/mesh_snapshot.cpp
     src/phase_graph.cpp
     src/rift.cpp
 )

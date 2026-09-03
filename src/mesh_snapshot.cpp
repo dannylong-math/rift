@@ -130,6 +130,8 @@ RiftContext::create_mesh_snapshot(std::unique_ptr<dealii::parallel::distributed:
     }
 
     const auto id = MeshSnapshotId::from_index(next_mesh_snapshot_index_);
+    // make_shared cannot access MeshSnapshot's private constructor; direct
+    // shared_ptr construction preserves the RiftContext-only creation boundary.
     std::shared_ptr<const MeshSnapshot<dim>> snapshot(
         new MeshSnapshot<dim>(id, std::move(triangulation), std::move(mapping)));
     ++next_mesh_snapshot_index_;
