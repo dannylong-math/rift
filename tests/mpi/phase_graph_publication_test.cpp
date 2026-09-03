@@ -154,6 +154,7 @@ void test_checked_lookup()
     }
     expect(not graph_ptr->find_phase("Air").has_value());
     expect(not graph_ptr->find_phase("vapor").has_value());
+    expect(not graph_ptr->find_phase("z-phase").has_value());
 
     const auto first_interface = graph_ptr->find_interface("air-solid");
     const auto last_interface = graph_ptr->find_interface("water-solid");
@@ -167,6 +168,7 @@ void test_checked_lookup()
     }
     expect(not graph_ptr->find_interface("Free-surface").has_value());
     expect(not graph_ptr->find_interface("missing").has_value());
+    expect(not graph_ptr->find_interface("z-interface").has_value());
 
     expect(throws<std::out_of_range>([] { static_cast<void>(graph_ptr->phase(rift::PhaseId::from_index(4))); }));
     expect(throws<std::out_of_range>(

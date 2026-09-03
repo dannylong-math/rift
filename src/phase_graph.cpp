@@ -246,7 +246,9 @@ struct DiagnosticField {
         {.name = "Physics",
          .configured = quote_configured_value(subject.specification.physics_key.value()),
          .expected = "non-empty UTF-8 phase-physics key"},
-    };
+        // GCC maps initializer-list exception cleanup to this closing brace;
+        // formatter tests exercise construction of both fields.
+    }; // GCOVR_EXCL_BR_LINE
 }
 
 /** \brief Describe the configured fields of one interface subject. */
@@ -265,7 +267,9 @@ struct DiagnosticField {
         {.name = "Operator",
          .configured = quote_configured_value(subject.specification.operator_key.value()),
          .expected = "compatible non-empty UTF-8 interface-operator key"},
-    };
+        // GCC maps initializer-list exception cleanup to this closing brace;
+        // formatter tests exercise construction of all four fields.
+    }; // GCOVR_EXCL_BR_LINE
 }
 
 /** \brief Make a human-recognizable heading for one phase subject. */
@@ -650,7 +654,9 @@ template<class Integer> void append_integer(AgreementRecord& record, const Integ
 /** \brief Record every sorted input field without delimiter-based encoding. */
 [[nodiscard]] AgreementRecord make_input_agreement_record(const PhaseGraphSpecification& specification)
 {
-    AgreementRecord record{"rift.phase_graph.input.v1", "phases"};
+    // GCC maps initializer-list exception cleanup to this construction; MPI
+    // agreement tests exercise records containing both successful and invalid inputs.
+    AgreementRecord record{"rift.phase_graph.input.v1", "phases"}; // GCOVR_EXCL_BR_LINE
     append_integer(record, specification.phases.size());
     for (const auto& phase : specification.phases) {
         record.push_back(phase.name);
@@ -880,8 +886,10 @@ PhaseGraphResult RiftContext::create_phase_graph(PhaseGraphSpecification specifi
     const auto creation_was_already_attempted = phase_graph_creation_attempted_;
     phase_graph_creation_attempted_ = true;
 
-    const AgreementRecord context_state{"rift.phase_graph.context.v1",
-                                        creation_was_already_attempted ? "attempted" : "not-attempted"};
+    const auto* const context_state_value = creation_was_already_attempted ? "attempted" : "not-attempted";
+    // GCC maps initializer-list exception cleanup to this construction; the
+    // separately evaluated state decision is covered in both directions.
+    const AgreementRecord context_state{"rift.phase_graph.context.v1", context_state_value}; // GCOVR_EXCL_BR_LINE
     const auto mismatching_rank = find_first_mismatching_rank(mpi_communicator(), context_state);
 
     // Reaching this branch requires ranks to have made different prior calls,

@@ -182,12 +182,14 @@ void test_no_phases_and_sealed_failure(rift::RiftContext& context)
         .interfaces =
             {
                 interface("", "alpha", "beta", ""),
+                interface("ambiguous-endpoint", "dup", "alpha", "valid"),
                 interface("bad-endpoints", invalid, invalid, "valid"),
                 interface(invalid, "alpha", "beta", invalid),
                 interface("dup-i", "alpha", "beta", "valid"),
                 interface("dup-i", "alpha", "gamma", "valid"),
                 interface("missing", "absent", "alpha", "valid"),
                 interface("missing-plus", "alpha", "absent", "valid"),
+                interface("invalid-plus-only", "alpha", invalid, "valid"),
                 interface("pair-a", "beta", "gamma", "valid"),
                 interface("pair-b", "gamma", "beta", "valid"),
                 interface("self", "alpha", "alpha", "valid"),
@@ -216,7 +218,7 @@ void test_collected_field_and_topology_errors(rift::RiftContext& context)
     }
 
     const auto& errors = result.error();
-    expect(errors.size() == std::size_t{17});
+    expect(errors.size() == std::size_t{18});
     expect(error_count(errors, rift::PhaseGraphErrorCode::empty_phase_name) == std::size_t{1});
     expect(error_count(errors, rift::PhaseGraphErrorCode::empty_physics_key) == std::size_t{1});
     expect(error_count(errors, rift::PhaseGraphErrorCode::duplicate_phase_name) == std::size_t{1});
@@ -226,7 +228,7 @@ void test_collected_field_and_topology_errors(rift::RiftContext& context)
     expect(error_count(errors, rift::PhaseGraphErrorCode::missing_incident_phase) == std::size_t{2});
     expect(error_count(errors, rift::PhaseGraphErrorCode::self_interface) == std::size_t{1});
     expect(error_count(errors, rift::PhaseGraphErrorCode::duplicate_phase_pair) == std::size_t{2});
-    expect(error_count(errors, rift::PhaseGraphErrorCode::invalid_utf8) == std::size_t{6});
+    expect(error_count(errors, rift::PhaseGraphErrorCode::invalid_utf8) == std::size_t{7});
     expect(compatibility_calls == std::size_t{0});
 
     const auto phase_error = std::ranges::find_if(

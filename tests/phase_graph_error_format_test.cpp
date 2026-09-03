@@ -82,6 +82,24 @@ int main()
             expect(formatted.ends_with("[invalid_utf8] the operator key is not valid UTF-8"));
         };
 
+        "generic controls and unknown error codes remain visible"_test = [] {
+            std::string configured_name{"phase"};
+            configured_name.push_back('\f');
+            configured_name.push_back('\x01');
+
+            const rift::PhaseGraphErrorSubject subject = rift::PhaseErrorSubject{
+                .sorted_index = 0,
+                .specification = {.name = std::move(configured_name), .physics_key = rift::PhysicsKey{"physics"}},
+            };
+            const rift::PhaseGraphErrors errors{
+                phase_error(static_cast<rift::PhaseGraphErrorCode>(255), "unrecognized code", subject),
+            };
+            const auto formatted = rift::format_phase_graph_errors(errors);
+
+            expect(formatted.contains(R"(Phase "phase\f\x01")"));
+            expect(formatted.ends_with("[unknown_error] unrecognized code"));
+        };
+
         "empty names use their canonical position only as a fallback"_test = [] {
             const rift::PhaseGraphErrorSubject phase_subject = rift::PhaseErrorSubject{
                 .sorted_index = 1,
@@ -120,6 +138,48 @@ int main()
             expect(formatted.find("first subject error") < formatted.find("second subject error"));
             expect(formatted.find("second subject error") < formatted.find("unscoped error"));
             expect(formatted.find("Phase \"water\"") == formatted.rfind("Phase \"water\""));
+        };
+
+        "phase and interface subjects with equal indices remain distinct"_test = [] {
+            const rift::PhaseGraphErrorSubject first_phase = rift::PhaseErrorSubject{
+                .sorted_index = 0,
+                .specification = {.name = "alpha", .physics_key = rift::PhysicsKey{"physics-a"}},
+            };
+            const rift::PhaseGraphErrorSubject second_phase = rift::PhaseErrorSubject{
+                .sorted_index = 1,
+                .specification = {.name = "beta", .physics_key = rift::PhysicsKey{"physics-b"}},
+            };
+            const rift::PhaseGraphErrorSubject first_interface = rift::InterfaceErrorSubject{
+                .sorted_index = 0,
+                .specification = {.name = "alpha-beta",
+                                  .minus_phase = "alpha",
+                                  .plus_phase = "beta",
+                                  .operator_key = rift::InterfaceOperatorKey{"law-ab"}},
+            };
+            const rift::PhaseGraphErrorSubject second_interface = rift::InterfaceErrorSubject{
+                .sorted_index = 1,
+                .specification = {.name = "beta-gamma",
+                                  .minus_phase = "beta",
+                                  .plus_phase = "gamma",
+                                  .operator_key = rift::InterfaceOperatorKey{"law-bg"}},
+            };
+            const rift::PhaseGraphErrors errors{
+                {.code = rift::PhaseGraphErrorCode::no_phases, .message = "unscoped first"},
+                phase_error(rift::PhaseGraphErrorCode::empty_physics_key, "alpha error", first_phase),
+                interface_error(rift::PhaseGraphErrorCode::empty_interface_operator_key, "first interface error",
+                                first_interface),
+                interface_error(rift::PhaseGraphErrorCode::invalid_utf8, "second interface error", first_interface),
+                phase_error(rift::PhaseGraphErrorCode::empty_physics_key, "beta error", second_phase),
+                interface_error(rift::PhaseGraphErrorCode::empty_interface_operator_key, "different interface error",
+                                second_interface),
+            };
+            const auto formatted = rift::format_phase_graph_errors(errors);
+
+            expect(formatted.find("unscoped first") < formatted.find("Phase \"alpha\""));
+            expect(formatted.find("Phase \"alpha\"") < formatted.find("Interface \"alpha-beta\""));
+            expect(formatted.find("Interface \"alpha-beta\"") < formatted.find("Phase \"beta\""));
+            expect(formatted.find("Phase \"beta\"") < formatted.find("Interface \"beta-gamma\""));
+            expect(formatted.find("Interface \"alpha-beta\"") == formatted.rfind("Interface \"alpha-beta\""));
         };
     };
 

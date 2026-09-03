@@ -81,11 +81,14 @@
 
 - The supported coverage commands are compiler-specific presets wrapped by one
   script. GCC uses an isolated GCC-built deal.II stack under
-  `.dependencies-gcc/`, writes Cobertura to
-  `build/gcc-coverage/coverage.xml`, and enforces 100 percent line, function,
-  and branch coverage through gcovr 8.6. Clang uses LLVM source-based coverage,
-  writes `build/clang-coverage/coverage-summary.json`, and enforces the same
-  three metrics:
+  `.dependencies-gcc/`, preserves raw metrics in
+  `build/gcc-coverage/coverage-raw-summary.json`, and writes policy-adjusted
+  summaries and Cobertura to `build/gcc-coverage/coverage-summary.json` and
+  `build/gcc-coverage/coverage.xml`. Clang preserves its raw report in
+  `build/clang-coverage/coverage-summary.json` and checks its uncovered source
+  locations against the exact approved exclusion list. Both commands enforce
+  100 percent policy-adjusted line, function, and branch coverage while still
+  printing the raw metrics:
 
   ```console
   ./scripts/run_coverage.sh gcc

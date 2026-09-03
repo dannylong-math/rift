@@ -147,14 +147,30 @@ jobs:
       - name: Generate coverage report
         run: |
           python -m pip install gcovr==8.6
+          printf 'Raw GCC coverage:\n'
           gcovr \
             --root . \
             --filter 'include/rift/' \
             --filter 'src/' \
             --print-summary \
+            --json-summary-pretty \
+            --output coverage-raw-summary.json \
+            build/coverage
+
+          printf 'Policy-adjusted GCC coverage:\n'
+          gcovr \
+            --root . \
+            --filter 'include/rift/' \
+            --filter 'src/' \
+            --exclude-throw-branches \
+            --exclude-unreachable-branches \
+            --exclude-noncode-lines \
+            --print-summary \
             --fail-under-line 100 \
             --fail-under-function 100 \
             --fail-under-branch 100 \
+            --json-summary-pretty \
+            --json-summary coverage-summary.json \
             --cobertura-pretty \
             --output coverage.xml \
             build/coverage
