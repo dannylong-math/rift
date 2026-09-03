@@ -26,6 +26,7 @@
 #include <optional>
 #include <ranges>
 #include <rift/phase_support.hpp>
+#include <rift/rift_context.hpp>
 #include <span>
 #include <string>
 #include <tuple>
@@ -721,6 +722,15 @@ constexpr unsigned int ghost_activation_mpi_tag = 27341;
     return dealii::Utilities::MPI::max(static_cast<unsigned int>(local_changed), communicator) != 0;
 }
 
+/** \brief Test one phase bit on one locally indexed active cell. */
+[[nodiscard]] bool phase_is_supported(const LocalPhaseSupportState& state, const std::size_t cell,
+                                      const std::size_t phase) noexcept
+{
+    const auto block = phase / phase_flags_per_block;
+    const auto mask = std::uint64_t{1} << (phase % phase_flags_per_block);
+    return (state.phase_flags[cell * state.blocks_per_cell + block] & mask) != 0;
+}
+
 /** \brief Compute the complete distributed least fixed point for all phases. */
 template<int dim>
 [[nodiscard]] LocalPhaseSupportState
@@ -739,15 +749,6 @@ close_distributed_phase_support(const MeshSnapshot<dim>& mesh,
     } while (globally_changed);
     return state;
 }
-
-/** \brief Compile both supported validation paths before factory integration. */
-[[maybe_unused]] constexpr auto validate_phase_support_inputs_2d = &validate_phase_support_inputs<2>;
-/** \brief Compile both supported validation paths before factory integration. */
-[[maybe_unused]] constexpr auto validate_phase_support_inputs_3d = &validate_phase_support_inputs<3>;
-/** \brief Compile both complete distributed-closure paths before factory integration. */
-[[maybe_unused]] constexpr auto close_distributed_phase_support_2d = &close_distributed_phase_support<2>;
-/** \brief Compile both complete distributed-closure paths before factory integration. */
-[[maybe_unused]] constexpr auto close_distributed_phase_support_3d = &close_distributed_phase_support<3>;
 
 } // namespace
 
@@ -798,7 +799,52 @@ const PhaseSupport& PhaseSupportSet<dim>::support(const PhaseId phase) const
     return supports_.at(phase.value());
 }
 
+template<int dim>
+    requires(dim == 2 || dim == 3)
+PhaseSupportResult<dim> RiftContext::create_phase_supports(std::shared_ptr<const MeshSnapshot<dim>> mesh,
+                                                           std::vector<PhaseSupportSpecification> specifications)
+{
+    auto validation = validate_phase_support_inputs<dim>(mpi_communicator(), this_mpi_process(), phase_graph_.get(),
+                                                         std::move(mesh), std::move(specifications));
+    if (!validation.has_value()) {
+        return std::unexpected(std::move(validation.error()));
+    }
+
+    auto inputs = std::move(validation.value());
+    auto state = close_distributed_phase_support(*inputs.mesh, inputs.specifications, phase_graph_->phases().size());
+
+    std::vector<PhaseSupport> supports;
+    supports.reserve(inputs.specifications.size());
+    for (auto& specification : inputs.specifications) {
+        const auto phase = static_cast<std::size_t>(specification.phase.value());
+        auto cells = std::move(specification.requested_cells);
+        const auto requested_count = cells.size();
+
+        for (std::size_t cell = 0; cell < state.topology.cells.size(); ++cell) {
+            const auto& closure_cell = state.topology.cells[cell];
+            if (!closure_cell.locally_owned || !phase_is_supported(state, cell, phase)) {
+                continue;
+            }
+
+            const auto requested_cells = std::span<const dealii::CellId>{cells}.first(requested_count);
+            if (!std::ranges::binary_search(requested_cells, closure_cell.id, CellIdLess{})) {
+                cells.push_back(closure_cell.id);
+            }
+        }
+
+        PhaseSupport support(specification.phase, std::move(cells), requested_count);
+        supports.push_back(std::move(support));
+    }
+
+    return PhaseSupportSet<dim>(std::move(inputs.mesh), std::move(supports));
+}
+
 template class PhaseSupportSet<2>;
 template class PhaseSupportSet<3>;
+
+template PhaseSupportResult<2> RiftContext::create_phase_supports<2>(std::shared_ptr<const MeshSnapshot<2>>,
+                                                                     std::vector<PhaseSupportSpecification>);
+template PhaseSupportResult<3> RiftContext::create_phase_supports<3>(std::shared_ptr<const MeshSnapshot<3>>,
+                                                                     std::vector<PhaseSupportSpecification>);
 
 } // namespace rift
