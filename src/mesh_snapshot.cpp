@@ -50,8 +50,8 @@ uses_mpi_world(const std::unique_ptr<dealii::parallel::distributed::Triangulatio
 
     int relationship = MPI_UNEQUAL;
     const int status = MPI_Comm_compare(triangulation->get_mpi_communicator(), MPI_COMM_WORLD, &relationship);
-    if (status != MPI_SUCCESS) {
-        throw dealii::ExcMPI(status);
+    if (status != MPI_SUCCESS) {      // GCOVR_EXCL_BR_LINE
+        throw dealii::ExcMPI(status); // GCOVR_EXCL_LINE
     }
     return relationship == MPI_IDENT;
 }
@@ -132,7 +132,7 @@ RiftContext::create_mesh_snapshot(std::unique_ptr<dealii::parallel::distributed:
     const auto id = MeshSnapshotId::from_index(next_mesh_snapshot_index_);
     // make_shared cannot access MeshSnapshot's private constructor; direct
     // shared_ptr construction preserves the RiftContext-only creation boundary.
-    std::shared_ptr<const MeshSnapshot<dim>> snapshot(
+    std::shared_ptr<const MeshSnapshot<dim>> snapshot( // GCOVR_EXCL_BR_LINE
         new MeshSnapshot<dim>(id, std::move(triangulation), std::move(mapping)));
     ++next_mesh_snapshot_index_;
     return snapshot;

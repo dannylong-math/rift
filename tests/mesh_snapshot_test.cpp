@@ -112,6 +112,33 @@ int main(int argc, char** argv)
             expect(errors.at(1).message.contains("rank 0"));
         };
 
+        "MeshSnapshot validates null resources for the 3D instantiation"_test = [&context] {
+            const auto result = context.create_mesh_snapshot<3>({}, make_mapping<3>());
+            expect(not result.has_value());
+            if (!result.has_value()) {
+                expect(result.error().size() == std::size_t{1});
+                expect(result.error().front().code == rift::MeshSnapshotErrorCode::null_triangulation);
+            }
+        };
+
+        "MeshSnapshot errors compare every diagnostic field"_test = [] {
+            const rift::MeshSnapshotError baseline{
+                .code = rift::MeshSnapshotErrorCode::null_triangulation, .rank = 1, .message = "diagnostic"};
+            const rift::MeshSnapshotError equal{
+                .code = rift::MeshSnapshotErrorCode::null_triangulation, .rank = 1, .message = "diagnostic"};
+            const rift::MeshSnapshotError different_code{
+                .code = rift::MeshSnapshotErrorCode::null_mapping, .rank = 1, .message = "diagnostic"};
+            const rift::MeshSnapshotError different_rank{
+                .code = rift::MeshSnapshotErrorCode::null_triangulation, .rank = 2, .message = "diagnostic"};
+            const rift::MeshSnapshotError different_message{
+                .code = rift::MeshSnapshotErrorCode::null_triangulation, .rank = 1, .message = "other"};
+
+            expect(baseline == equal);
+            expect(baseline != different_code);
+            expect(baseline != different_rank);
+            expect(baseline != different_message);
+        };
+
         "MeshSnapshot rejects a non-world communicator"_test = [&context] {
             const auto result =
                 context.create_mesh_snapshot<2>(make_triangulation<2>(MPI_COMM_SELF), make_mapping<2>());
