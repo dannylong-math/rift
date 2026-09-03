@@ -114,6 +114,7 @@ endif()
 add_library(rift STATIC
     src/mesh_snapshot.cpp
     src/phase_graph.cpp
+    src/phase_support.cpp
     src/rift.cpp
 )
 add_library(rift::rift ALIAS rift)

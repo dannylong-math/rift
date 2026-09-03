@@ -10,6 +10,8 @@
 #include <memory>
 #include <rift/mesh_snapshot.hpp>
 #include <rift/phase_graph.hpp>
+#include <rift/phase_support.hpp>
+#include <vector>
 
 namespace rift {
 
@@ -137,6 +139,25 @@ public:
     [[nodiscard]] MeshSnapshotResult<dim>
     create_mesh_snapshot(std::unique_ptr<dealii::parallel::distributed::Triangulation<dim>> triangulation,
                          std::unique_ptr<dealii::Mapping<dim>> mapping);
+
+    /**
+     * \brief Collectively create immutable conforming support for every phase.
+     *
+     * Every world rank must call this member in the same order with the same
+     * supported dimension and logical mesh snapshot. Each rank supplies
+     * exactly one specification per canonical phase, containing only requested
+     * locally owned active cells.
+     *
+     * \tparam dim volume-mesh dimension; only 2 and 3 are supported.
+     * \param mesh immutable mesh snapshot retained by a successful result.
+     * \param specifications owner-local requests owned by this call.
+     * \return a complete immutable support aggregate or coherent ordered
+     * errors on every rank.
+     */
+    template<int dim>
+        requires(dim == 2 || dim == 3)
+    [[nodiscard]] PhaseSupportResult<dim> create_phase_supports(std::shared_ptr<const MeshSnapshot<dim>> mesh,
+                                                                std::vector<PhaseSupportSpecification> specifications);
 
 private:
     /**
