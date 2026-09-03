@@ -715,15 +715,28 @@ constexpr unsigned int ghost_activation_mpi_tag = 27341;
     return changed;
 }
 
-/** \brief Build and locally saturate one validated support-construction state. */
+/** \brief Report whether any rank changed support during the current round. */
+[[nodiscard]] bool any_rank_changed(const MPI_Comm communicator, const bool local_changed)
+{
+    return dealii::Utilities::MPI::max(static_cast<unsigned int>(local_changed), communicator) != 0;
+}
+
+/** \brief Compute the complete distributed least fixed point for all phases. */
 template<int dim>
 [[nodiscard]] LocalPhaseSupportState
-make_locally_saturated_phase_support(const MeshSnapshot<dim>& mesh,
-                                     const std::vector<PhaseSupportSpecification>& specifications,
-                                     const std::size_t phase_count)
+close_distributed_phase_support(const MeshSnapshot<dim>& mesh,
+                                const std::vector<PhaseSupportSpecification>& specifications,
+                                const std::size_t phase_count)
 {
     auto state = make_local_phase_support_state(mesh, specifications, phase_count);
-    static_cast<void>(saturate_local_phase_support(state));
+    bool globally_changed = false;
+    do {
+        const auto local_closure_changed = saturate_local_phase_support(state);
+        const auto ghost_publication_changed = publish_owner_phase_flags_to_ghosts(mesh, state);
+        const auto owner_activation_changed = send_ghost_activations_to_owners(mesh.communicator(), state);
+        const auto locally_changed = local_closure_changed || ghost_publication_changed || owner_activation_changed;
+        globally_changed = any_rank_changed(mesh.communicator(), locally_changed);
+    } while (globally_changed);
     return state;
 }
 
@@ -731,16 +744,10 @@ make_locally_saturated_phase_support(const MeshSnapshot<dim>& mesh,
 [[maybe_unused]] constexpr auto validate_phase_support_inputs_2d = &validate_phase_support_inputs<2>;
 /** \brief Compile both supported validation paths before factory integration. */
 [[maybe_unused]] constexpr auto validate_phase_support_inputs_3d = &validate_phase_support_inputs<3>;
-/** \brief Compile both supported local-closure paths before factory integration. */
-[[maybe_unused]] constexpr auto make_locally_saturated_phase_support_2d = &make_locally_saturated_phase_support<2>;
-/** \brief Compile both supported local-closure paths before factory integration. */
-[[maybe_unused]] constexpr auto make_locally_saturated_phase_support_3d = &make_locally_saturated_phase_support<3>;
-/** \brief Compile both owner-publication paths before factory integration. */
-[[maybe_unused]] constexpr auto publish_owner_phase_flags_to_ghosts_2d = &publish_owner_phase_flags_to_ghosts<2>;
-/** \brief Compile both owner-publication paths before factory integration. */
-[[maybe_unused]] constexpr auto publish_owner_phase_flags_to_ghosts_3d = &publish_owner_phase_flags_to_ghosts<3>;
-/** \brief Compile the sparse reverse exchange before factory integration. */
-[[maybe_unused]] constexpr auto send_ghost_activations_to_owners_path = &send_ghost_activations_to_owners;
+/** \brief Compile both complete distributed-closure paths before factory integration. */
+[[maybe_unused]] constexpr auto close_distributed_phase_support_2d = &close_distributed_phase_support<2>;
+/** \brief Compile both complete distributed-closure paths before factory integration. */
+[[maybe_unused]] constexpr auto close_distributed_phase_support_3d = &close_distributed_phase_support<3>;
 
 } // namespace
 
