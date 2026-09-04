@@ -11,6 +11,7 @@
 #include <rift/mesh_snapshot.hpp>
 #include <rift/phase_graph.hpp>
 #include <rift/phase_support.hpp>
+#include <rift/space_draft.hpp>
 #include <vector>
 
 namespace rift {
@@ -159,6 +160,25 @@ public:
     [[nodiscard]] PhaseSupportResult<dim> create_phase_supports(std::shared_ptr<const MeshSnapshot<dim>> mesh,
                                                                 std::vector<PhaseSupportSpecification> specifications);
 
+    /**
+     * \brief Collectively validate and canonicalize one finite-element space draft.
+     *
+     * Every world rank must call this member in the same order with the same
+     * supported dimension, successful support-set identity, and logically
+     * equivalent schema. Input permutations are canonicalized before exact
+     * rank agreement. A successful call transfers the support aggregate into
+     * a move-only draft and reserves one context-local space epoch.
+     *
+     * \tparam dim volume-mesh dimension; only 2 and 3 are supported.
+     * \param phase_supports completed support aggregate owned by this call.
+     * \param specification representation-neutral field schema owned by this call.
+     * \return an active draft or coherent ordered errors on every rank.
+     */
+    template<int dim>
+        requires(dim == 2 || dim == 3)
+    [[nodiscard]] SpaceDraftResult<dim> create_space_draft(PhaseSupportSet<dim> phase_supports,
+                                                           SpaceSpecification specification);
+
 private:
     /**
      * \brief RAII owner of deal.II, p4est, and MPI initialization state.
@@ -173,6 +193,12 @@ private:
 
     /** \brief Next context-local identity for a successfully published mesh. */
     std::uint64_t next_mesh_snapshot_index_ = 0;
+
+    /** \brief Next context-local identity for successful support construction. */
+    std::uint64_t next_phase_support_set_index_ = 0;
+
+    /** \brief Next context-local epoch reserved by successful draft construction. */
+    std::uint64_t next_space_epoch_index_ = 0;
 };
 
 } // namespace rift
