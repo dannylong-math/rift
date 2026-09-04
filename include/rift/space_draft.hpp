@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <memory>
 #include <optional>
 #include <rift/phase_graph.hpp>
 #include <rift/phase_support.hpp>
@@ -20,6 +21,14 @@
 namespace rift {
 
 class RiftContext;
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
+class PhaseSupportFieldGroupSpace;
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
+class GeometryFieldGroupSpace;
 
 /** \brief Implementation tags for field-schema identities. */
 namespace detail {
@@ -35,6 +44,11 @@ struct DiscreteGeometryMetadataIdTag {};
 
 /** \brief Distinguish provisional space epochs from other identities. */
 struct SpaceEpochTag {};
+
+/** \brief Hide field-space owning containers from the schema header. */
+template<int dim>
+    requires(dim == 2 || dim == 3)
+struct FieldSpaceStorage;
 
 } // namespace detail
 
@@ -294,7 +308,7 @@ template<int dim>
 class SpaceDraft {
 public:
     /** \brief Destroy this draft and its owned support aggregate. */
-    ~SpaceDraft() = default;
+    ~SpaceDraft();
     /** \brief Copy construction is disabled because the support aggregate is move-only. */
     SpaceDraft(const SpaceDraft&) = delete;
     /** \brief Copy assignment is disabled because the support aggregate is move-only. */
@@ -316,6 +330,35 @@ public:
     /** \brief Borrow the support aggregate retained by an active draft. */
     [[nodiscard]] const PhaseSupportSet<dim>& phase_supports() const noexcept { return phase_supports_; }
 
+    /** \brief Report whether finite-element spaces were committed successfully. */
+    [[nodiscard]] bool field_spaces_built() const noexcept { return field_spaces_ != nullptr; }
+
+    /** \brief Return support-restricted spaces in canonical descriptor order. */
+    [[nodiscard]] std::span<const PhaseSupportFieldGroupSpace<dim>> phase_support_field_spaces() const noexcept;
+
+    /** \brief Return geometry spaces in canonical descriptor order. */
+    [[nodiscard]] std::span<const GeometryFieldGroupSpace<dim>> geometry_field_spaces() const noexcept;
+
+    /**
+     * \brief Resolve one support-restricted field-space identity.
+     *
+     * \param id canonical category-local field-group identity.
+     * \return immutable field-group space for `id`.
+     * \throws std::logic_error when field spaces have not been built.
+     * \throws std::out_of_range when `id` is invalid after construction.
+     */
+    [[nodiscard]] const PhaseSupportFieldGroupSpace<dim>& phase_support_field_space(PhaseSupportFieldGroupId id) const;
+
+    /**
+     * \brief Resolve one geometry field-space identity.
+     *
+     * \param id canonical category-local field-group identity.
+     * \return immutable field-group space for `id`.
+     * \throws std::logic_error when field spaces have not been built.
+     * \throws std::out_of_range when `id` is invalid after construction.
+     */
+    [[nodiscard]] const GeometryFieldGroupSpace<dim>& geometry_field_space(GeometryFieldGroupId id) const;
+
 private:
     friend class RiftContext;
 
@@ -328,6 +371,8 @@ private:
     PhaseSupportSet<dim> phase_supports_;
     /** \brief Canonical representation-neutral field schema. */
     SpaceSchema schema_;
+    /** \brief Opaque canonical field-space owners, allocated only on commit. */
+    std::unique_ptr<detail::FieldSpaceStorage<dim>> field_spaces_;
     /** \brief Whether this object still represents a usable draft. */
     bool active_ = true;
 };

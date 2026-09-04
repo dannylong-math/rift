@@ -17,12 +17,14 @@
 #include <iterator>
 #include <mpi.h>
 #include <optional>
+#include <rift/field_group_space.hpp>
 #include <rift/phase_graph.hpp>
 #include <rift/phase_support.hpp>
 #include <rift/rift_context.hpp>
 #include <rift/space_draft.hpp>
 #include <simdutf.h> // NOLINT(misc-include-cleaner): simdutf's public umbrella owns this declaration.
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -31,6 +33,20 @@
 #include <vector>
 
 namespace rift {
+
+namespace detail {
+
+/** \brief Own both canonical field-space categories after atomic commit. */
+template<int dim>
+    requires(dim == 2 || dim == 3)
+struct FieldSpaceStorage {
+    /** \brief Support-restricted spaces in canonical descriptor order. */
+    std::vector<PhaseSupportFieldGroupSpace<dim>> phase_support_fields;
+    /** \brief Geometry spaces in canonical descriptor order. */
+    std::vector<GeometryFieldGroupSpace<dim>> geometry_fields;
+};
+
+} // namespace detail
 
 namespace {
 
@@ -848,10 +864,15 @@ SpaceDraft<dim>::SpaceDraft(const SpaceEpoch epoch, PhaseSupportSet<dim> phase_s
 
 template<int dim>
     requires(dim == 2 || dim == 3)
+SpaceDraft<dim>::~SpaceDraft() = default;
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
 SpaceDraft<dim>::SpaceDraft(SpaceDraft&& other) noexcept :
     epoch_(other.epoch_),
     phase_supports_(std::move(other.phase_supports_)),
     schema_(std::move(other.schema_)),
+    field_spaces_(std::move(other.field_spaces_)),
     active_(std::exchange(other.active_, false))
 {
 }
@@ -864,9 +885,56 @@ SpaceDraft<dim>& SpaceDraft<dim>::operator=(SpaceDraft&& other) noexcept
         epoch_ = other.epoch_;
         phase_supports_ = std::move(other.phase_supports_);
         schema_ = std::move(other.schema_);
+        field_spaces_ = std::move(other.field_spaces_);
         active_ = std::exchange(other.active_, false);
     }
     return *this;
+}
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
+std::span<const PhaseSupportFieldGroupSpace<dim>> SpaceDraft<dim>::phase_support_field_spaces() const noexcept
+{
+    return field_spaces_ == nullptr
+               ? std::span<const PhaseSupportFieldGroupSpace<dim>>{}
+               : std::span<const PhaseSupportFieldGroupSpace<dim>>{field_spaces_->phase_support_fields};
+}
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
+std::span<const GeometryFieldGroupSpace<dim>> SpaceDraft<dim>::geometry_field_spaces() const noexcept
+{
+    return field_spaces_ == nullptr ? std::span<const GeometryFieldGroupSpace<dim>>{}
+                                    : std::span<const GeometryFieldGroupSpace<dim>>{field_spaces_->geometry_fields};
+}
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
+const PhaseSupportFieldGroupSpace<dim>&
+SpaceDraft<dim>::phase_support_field_space(const PhaseSupportFieldGroupId id) const
+{
+    if (field_spaces_ == nullptr) {
+        throw std::logic_error("phase-support field spaces have not been built");
+    }
+    if (id.value() >= field_spaces_->phase_support_fields.size()) {
+        throw std::out_of_range(std::format("phase-support field-group ID {} is outside [0, {})", id.value(),
+                                            field_spaces_->phase_support_fields.size()));
+    }
+    return field_spaces_->phase_support_fields.at(id.value());
+}
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
+const GeometryFieldGroupSpace<dim>& SpaceDraft<dim>::geometry_field_space(const GeometryFieldGroupId id) const
+{
+    if (field_spaces_ == nullptr) {
+        throw std::logic_error("geometry field spaces have not been built");
+    }
+    if (id.value() >= field_spaces_->geometry_fields.size()) {
+        throw std::out_of_range(std::format("geometry field-group ID {} is outside [0, {})", id.value(),
+                                            field_spaces_->geometry_fields.size()));
+    }
+    return field_spaces_->geometry_fields.at(id.value());
 }
 
 template<int dim>

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deal.II/base/mpi.h>
 #include <memory>
+#include <rift/field_group_space.hpp>
 #include <rift/mesh_snapshot.hpp>
 #include <rift/phase_graph.hpp>
 #include <rift/phase_support.hpp>
@@ -178,6 +179,23 @@ public:
         requires(dim == 2 || dim == 3)
     [[nodiscard]] SpaceDraftResult<dim> create_space_draft(PhaseSupportSet<dim> phase_supports,
                                                            SpaceSpecification specification);
+
+    /**
+     * \brief Collectively build every continuous field-group space in a draft.
+     *
+     * Every world rank must call this member in the same order with the same
+     * active draft epoch, build state, and numbering option. Recoverable Rift
+     * preflight defects leave the draft unchanged. After successful preflight,
+     * deal.II exceptions propagate unchanged.
+     *
+     * \tparam dim volume-mesh dimension; only 2 and 3 are supported.
+     * \param draft active provisional space that receives an atomic commit.
+     * \param options common construction options for every field group.
+     * \return success or coherent ordered preflight errors on every rank.
+     */
+    template<int dim>
+        requires(dim == 2 || dim == 3)
+    [[nodiscard]] FieldSpaceBuildResult build_field_spaces(SpaceDraft<dim>& draft, FieldSpaceBuildOptions options = {});
 
 private:
     /**

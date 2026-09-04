@@ -113,6 +113,7 @@ if(ENABLE_CLANG_TIDY)
 endif()
 
 add_library(rift STATIC
+    src/field_group_space.cpp
     src/mesh_snapshot.cpp
     src/phase_graph.cpp
     src/phase_support.cpp
