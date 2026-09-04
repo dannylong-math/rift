@@ -231,8 +231,11 @@ static_assert(phase_graph_error_code_names.size() ==
 
 /** \brief One row in a human-readable configured-versus-expected table. */
 struct DiagnosticField {
+    /** \brief Human-readable field label. */
     std::string_view name;
+    /** \brief Safely quoted configured value. */
     std::string configured;
+    /** \brief Description of the accepted value or constraint. */
     std::string_view expected;
 };
 
@@ -306,7 +309,9 @@ struct DiagnosticField {
 
 /** \brief Atomic errors collected beneath one optional configuration subject. */
 struct DiagnosticGroup {
+    /** \brief Optional shared phase or interface subject. */
     const PhaseGraphErrorSubject* subject;
+    /** \brief Atomic errors associated with this subject. */
     std::vector<const PhaseGraphError*> errors;
 };
 

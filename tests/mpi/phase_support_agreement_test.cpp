@@ -1,6 +1,6 @@
 #include <algorithm>
-#include <boost/serialization/string.hpp>
-#include <boost/serialization/vector.hpp>
+#include <boost/serialization/string.hpp> // IWYU pragma: keep
+#include <boost/serialization/vector.hpp> // IWYU pragma: keep
 #include <boost/ut.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +17,8 @@
 #include <mpi.h>
 #include <optional>
 #include <ranges>
+#include <rift/mesh_snapshot.hpp>
+#include <rift/phase_graph.hpp>
 #include <rift/phase_support.hpp>
 #include <rift/rift_context.hpp>
 #include <set>
@@ -117,14 +119,18 @@ template<int dim>
 [[nodiscard]] std::shared_ptr<const rift::MeshSnapshot<dim>> make_adaptive_snapshot(rift::RiftContext& context)
 {
     auto triangulation = std::make_unique<dealii::parallel::distributed::Triangulation<dim>>(MPI_COMM_WORLD);
-    std::vector<unsigned int> subdivisions(dim, 3U);
+    const std::vector<unsigned int> subdivisions(dim, 3U);
     dealii::Point<dim> upper_corner;
-    for (unsigned int direction = 0; direction < dim; ++direction) {
+    for (unsigned int direction = 0; std::cmp_less(direction, dim); ++direction) {
+        // The loop proves that the Point index is in range.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
         upper_corner[direction] = 3.0;
     }
     dealii::GridGenerator::subdivided_hyper_rectangle(*triangulation, subdivisions, dealii::Point<dim>{}, upper_corner);
     dealii::Point<dim> center;
-    for (unsigned int direction = 0; direction < dim; ++direction) {
+    for (unsigned int direction = 0; std::cmp_less(direction, dim); ++direction) {
+        // The loop proves that the Point index is in range.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
         center[direction] = 1.5;
     }
     for (const auto& cell : triangulation->active_cell_iterators()) {
@@ -144,6 +150,8 @@ template<int dim>
     return publish_snapshot(context, std::move(triangulation));
 }
 
+// This independent mesh oracle intentionally keeps the full traversal visible.
+// NOLINTBEGIN(readability-function-cognitive-complexity)
 template<int dim>
 [[nodiscard]] OracleTopology make_oracle_topology(const rift::MeshSnapshot<dim>& snapshot, const unsigned int rank)
 {
@@ -208,6 +216,7 @@ template<int dim>
     std::ranges::sort(topology.ghosts, {}, &GhostCellWire::id);
     return topology;
 }
+// NOLINTEND(readability-function-cognitive-complexity)
 
 [[nodiscard]] bool is_visible_across_partition(const std::vector<std::string>& group,
                                                const std::vector<GhostCellWire>& ghosts)
@@ -221,9 +230,8 @@ template<int dim>
                                                             const std::string& requested)
 {
     std::set<std::string> closed{requested};
-    bool changed = false;
-    do {
-        changed = false;
+    while (true) {
+        auto changed = false;
         for (const auto& group : groups) {
             const auto active =
                 std::ranges::any_of(group, [&](const std::string& cell) { return closed.contains(cell); });
@@ -234,7 +242,10 @@ template<int dim>
                 changed = closed.insert(cell).second || changed;
             }
         }
-    } while (changed);
+        if (!changed) {
+            break;
+        }
+    }
     return closed;
 }
 
@@ -414,7 +425,7 @@ void test_mesh_snapshot_agreement(rift::RiftContext& context)
     }
     boost::ut::expect(result.error().size() == context.n_mpi_processes() - 1U);
     for (std::size_t index = 0; index < result.error().size(); ++index) {
-        const auto& error = result.error()[index];
+        const auto& error = result.error().at(index);
         boost::ut::expect(error.code == rift::PhaseSupportErrorCode::mesh_snapshot_mismatch);
         boost::ut::expect(error.rank == index + 1U);
         boost::ut::expect(not error.phase.has_value());
@@ -463,8 +474,8 @@ void test_phase_graph_is_required(rift::RiftContext& context)
     }
     boost::ut::expect(result.error().size() == std::size_t{2});
     if (result.error().size() == 2) {
-        boost::ut::expect(result.error()[0].code == rift::PhaseSupportErrorCode::phase_graph_unavailable);
-        boost::ut::expect(result.error()[1].code == rift::PhaseSupportErrorCode::null_mesh);
+        boost::ut::expect(result.error().front().code == rift::PhaseSupportErrorCode::phase_graph_unavailable);
+        boost::ut::expect(result.error().back().code == rift::PhaseSupportErrorCode::null_mesh);
     }
 }
 

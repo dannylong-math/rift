@@ -91,9 +91,10 @@ int main()
                 .sorted_index = 0,
                 .specification = {.name = std::move(configured_name), .physics_key = rift::PhysicsKey{"physics"}},
             };
-            const rift::PhaseGraphErrors errors{
-                phase_error(static_cast<rift::PhaseGraphErrorCode>(255), "unrecognized code", subject),
-            };
+            // Deliberately exercise the formatter's defensive fallback.
+            // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+            constexpr auto unknown_error_code = static_cast<rift::PhaseGraphErrorCode>(255);
+            const rift::PhaseGraphErrors errors{phase_error(unknown_error_code, "unrecognized code", subject)};
             const auto formatted = rift::format_phase_graph_errors(errors);
 
             expect(formatted.contains(R"(Phase "phase\f\x01")"));

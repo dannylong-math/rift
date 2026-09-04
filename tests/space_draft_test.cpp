@@ -101,7 +101,7 @@ static_assert(not std::is_same_v<rift::SpaceEpoch, rift::PhaseSupportSetId>);
 
 } // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char** argv) // NOLINT(readability-function-cognitive-complexity): Boost.UT registration.
 {
     using namespace boost::ut;
 
@@ -114,7 +114,7 @@ int main(int argc, char** argv)
     context_ptr = &actual_context;
     graph_created = graph_result.has_value();
 
-    [[maybe_unused]] const suite<"SpaceDraft"> suite = [] {
+    [[maybe_unused]] const suite<"SpaceDraft"> suite = [] { // NOLINT(readability-function-cognitive-complexity)
         auto& context = *context_ptr;
 
         "phase-ranked input becomes a canonical strongly identified schema"_test = [&context] {
@@ -221,7 +221,7 @@ int main(int argc, char** argv)
             if (snapshot == nullptr) {
                 return;
             }
-            std::string invalid_utf8(1, static_cast<char>(0xFF));
+            const std::string invalid_utf8(1, static_cast<char>(0xFF));
             rift::SpaceSpecification specification{
                 .phase_support_fields =
                     {
@@ -277,6 +277,9 @@ int main(int argc, char** argv)
             if (snapshot == nullptr) {
                 return;
             }
+            // Deliberately exercise the validator's defensive fallback.
+            // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+            constexpr auto unsupported_kind = static_cast<rift::DiscreteGeometryMetadataKind>(99);
             rift::SpaceSpecification specification{
                 .phase_support_fields = {},
                 .geometry = {
@@ -321,7 +324,7 @@ int main(int argc, char** argv)
                         {.name = "unsupported",
                          .geometry_field_group = "unbound",
                          .component = 0,
-                         .kind = static_cast<rift::DiscreteGeometryMetadataKind>(99)},
+                         .kind = unsupported_kind},
                         {.name = "unknown-after-all-fields",
                          .geometry_field_group = "zzz",
                          .component = 0,
@@ -354,12 +357,13 @@ int main(int argc, char** argv)
             auto first = context.create_space_draft<2>(make_supports(context, snapshot), regional_specification());
             expect(first.has_value());
 
+            // Deliberately exercise the documented moved-from validation path.
+            // NOLINTBEGIN(bugprone-use-after-move)
             auto supports = make_supports(context, snapshot);
             auto active_supports = std::move(supports);
             expect(not supports.active());
-            // Intentionally exercise the public moved-from validation path.
-            const auto inactive = context.create_space_draft<2>( // NOLINT(bugprone-use-after-move)
-                std::move(supports), regional_specification());
+            const auto inactive = context.create_space_draft<2>(std::move(supports), regional_specification());
+            // NOLINTEND(bugprone-use-after-move)
             expect(not inactive.has_value());
             if (!inactive.has_value()) {
                 expect(has_code(inactive.error(), rift::SpaceDraftErrorCode::inactive_phase_support_set));

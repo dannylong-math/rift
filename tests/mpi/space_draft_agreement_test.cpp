@@ -202,12 +202,12 @@ void test_collective_inactive_support(rift::RiftContext& context)
     if (snapshot == nullptr) {
         return;
     }
+    // Deliberately give rank zero an inactive, moved-from support aggregate.
+    // NOLINTBEGIN(bugprone-use-after-move)
     auto moved_from = make_supports(context, snapshot);
     auto active = std::move(moved_from);
-    // Rank zero intentionally contributes the moved-from support aggregate.
-    auto selected = context.this_mpi_process() == 0 // NOLINT(bugprone-use-after-move)
-                        ? std::move(moved_from)
-                        : std::move(active);
+    auto selected = context.this_mpi_process() == 0 ? std::move(moved_from) : std::move(active);
+    // NOLINTEND(bugprone-use-after-move)
     const auto result = context.create_space_draft<2>(std::move(selected), schema());
     boost::ut::expect(not result.has_value());
     if (!result.has_value()) {

@@ -150,11 +150,12 @@ printf 'Raw Clang coverage:\n'
 jq '{type, version, data: [.data[] | {totals}]}' \
     "${COVERAGE_DATA}" > "${BUILD_DIR}/coverage-summary.json"
 
-# The same-order collective contracts make the defensive Task 04 block and
-# Task 06 MPI operational-failure path unreachable through public inputs.
+# The same-order collective contracts make the defensive Task 04 and Task 08
+# blocks and the Task 06 MPI operational-failure path unreachable through
+# public inputs.
 # Exact locations prevent an unrelated future miss from passing.
-readonly APPROVED_UNCOVERED_LINES=$'src/mesh_snapshot.cpp:54\nsrc/mesh_snapshot.cpp:55\nsrc/phase_graph.cpp:900\nsrc/phase_graph.cpp:901\nsrc/phase_graph.cpp:902\nsrc/phase_graph.cpp:903\nsrc/phase_graph.cpp:904'
-readonly APPROVED_UNCOVERED_BRANCHES=$'src/mesh_snapshot.cpp:53\nsrc/phase_graph.cpp:898'
+readonly APPROVED_UNCOVERED_LINES=$'src/mesh_snapshot.cpp:54\nsrc/mesh_snapshot.cpp:55\nsrc/phase_graph.cpp:905\nsrc/phase_graph.cpp:906\nsrc/phase_graph.cpp:907\nsrc/phase_graph.cpp:908\nsrc/phase_graph.cpp:909\nsrc/space_draft.cpp:689\nsrc/space_draft.cpp:690\nsrc/space_draft.cpp:691\nsrc/space_draft.cpp:692'
+readonly APPROVED_UNCOVERED_BRANCHES=$'src/mesh_snapshot.cpp:53\nsrc/phase_graph.cpp:903\nsrc/space_draft.cpp:687'
 
 actual_uncovered_lines="$(
     awk \
@@ -195,7 +196,7 @@ actual_uncovered_branches="$(
 )"
 
 if ! jq -e \
-    '.data[0].totals | (.lines.count - .lines.covered) == 7 and .functions.percent == 100 and .branches.notcovered == 2' \
+    '.data[0].totals | (.lines.count - .lines.covered) == 11 and .functions.percent == 100 and .branches.notcovered == 3' \
     "${BUILD_DIR}/coverage-summary.json" >/dev/null || \
     [[ "${actual_uncovered_lines}" != "${APPROVED_UNCOVERED_LINES}" ]] || \
     [[ "${actual_uncovered_branches}" != "${APPROVED_UNCOVERED_BRANCHES}" ]]; then

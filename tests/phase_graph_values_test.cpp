@@ -1,6 +1,7 @@
 #include <boost/ut.hpp>
 #include <compare>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <rift/phase_graph.hpp>
 #include <string>
@@ -32,7 +33,7 @@ int main()
 {
     using namespace boost::ut;
 
-    suite<"Phase graph"> suite = [] {
+    const suite<"Phase graph"> suite = [] {
         "phase and interface IDs preserve zero-based values and ordering"_test = [] {
             constexpr auto first_phase = rift::PhaseId::from_index(0);
             constexpr auto second_phase = rift::PhaseId::from_index(1);
@@ -127,12 +128,12 @@ int main()
             };
 
             expect(errors.size() == std::size_t{3});
-            expect(errors[0].code == rift::PhaseGraphErrorCode::empty_phase_name);
-            expect(errors[0].message == "phase name is empty");
-            expect(errors[1].code == rift::PhaseGraphErrorCode::collective_input_mismatch);
-            expect(errors[1].message == "rank inputs differ");
-            expect(errors[2].code == rift::PhaseGraphErrorCode::collective_compatibility_mismatch);
-            expect(errors[2].message == "rank outcomes differ");
+            expect(errors.at(0).code == rift::PhaseGraphErrorCode::empty_phase_name);
+            expect(errors.at(0).message == "phase name is empty");
+            expect(errors.at(1).code == rift::PhaseGraphErrorCode::collective_input_mismatch);
+            expect(errors.at(1).message == "rank inputs differ");
+            expect(errors.at(2).code == rift::PhaseGraphErrorCode::collective_compatibility_mismatch);
+            expect(errors.at(2).message == "rank outcomes differ");
         };
     };
 

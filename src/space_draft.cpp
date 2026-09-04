@@ -682,12 +682,15 @@ void add_agreement_errors(const SpaceDraftAgreementPacket& local, const SpaceDra
     }
     // Same-order collective calls advance every rank after the same successful
     // calls and advance none after failures. This defensive diagnostic can be
-    // reached only after an earlier collective-contract violation.
-    if (local.expected_epoch != reference.expected_epoch) {
+    // reached only after an earlier collective-contract violation; the reviewer
+    // approved this narrow unreachable-code exclusion on 2026-09-04.
+    if (local.expected_epoch != reference.expected_epoch) { // GCOVR_EXCL_BR_LINE
+        // GCOVR_EXCL_START
         add_error(errors, SpaceDraftErrorCode::space_epoch_mismatch, rank, {},
                   std::format("rank {} expected space epoch {}, but rank 0 expected {}", rank, local.expected_epoch,
                               reference.expected_epoch));
     }
+    // GCOVR_EXCL_STOP
     if (dealii::Utilities::pack(local.specification, false) !=
         dealii::Utilities::pack(reference.specification, false)) {
         add_error(errors, SpaceDraftErrorCode::schema_mismatch, rank, {},

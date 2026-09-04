@@ -1,4 +1,5 @@
 #include <boost/ut.hpp>
+#include <mpi.h>
 #include <rift/rift_context.hpp>
 #include <type_traits>
 
@@ -12,7 +13,7 @@ int main(int argc, char** argv)
     static rift::RiftContext* context_ptr = nullptr;
     context_ptr = &actual_context;
 
-    suite<"RiftContext"> suite = [] {
+    const suite<"RiftContext"> suite = [] {
         auto& context = *context_ptr;
         "RiftContext borrows the world communicator"_test = [&context] {
             expect(context.mpi_communicator() == MPI_COMM_WORLD);
@@ -22,7 +23,10 @@ int main(int argc, char** argv)
             int raw_rank = -1;
             int raw_size = -1;
 
+            // OpenMPI exposes these through mpi.h, which include-cleaner cannot map to its internal declaration.
+            // NOLINTNEXTLINE(misc-include-cleaner)
             expect(MPI_SUCCESS == MPI_Comm_rank(MPI_COMM_WORLD, &raw_rank));
+            // NOLINTNEXTLINE(misc-include-cleaner)
             expect(MPI_SUCCESS == MPI_Comm_size(MPI_COMM_WORLD, &raw_size));
             expect(0_i <= raw_rank);
             expect(raw_rank < raw_size);

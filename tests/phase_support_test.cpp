@@ -10,7 +10,8 @@
 #include <deal.II/grid/grid_generator.h>
 #include <memory>
 #include <mpi.h>
-#include <ranges>
+#include <rift/mesh_snapshot.hpp>
+#include <rift/phase_graph.hpp>
 #include <rift/phase_support.hpp>
 #include <rift/rift_context.hpp>
 #include <span>
@@ -71,12 +72,15 @@ template<int dim> [[nodiscard]] AdaptiveMeshFixture<dim> make_adaptive_snapshot(
     std::vector<unsigned int> subdivisions(dim, 1U);
     subdivisions.front() = 2U;
     dealii::Point<dim> upper_corner;
-    for (unsigned int direction = 0; direction < dim; ++direction) {
+    for (unsigned int direction = 0; std::cmp_less(direction, dim); ++direction) {
+        // The loop proves that the Point index is in range.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
         upper_corner[direction] = direction == 0 ? 2.0 : 1.0;
     }
     dealii::GridGenerator::subdivided_hyper_rectangle(*triangulation, subdivisions, dealii::Point<dim>{}, upper_corner);
 
     for (const auto& cell : triangulation->active_cell_iterators()) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
         if (cell->center()[0] < 1.0) {
             cell->set_refine_flag();
         }
@@ -85,6 +89,7 @@ template<int dim> [[nodiscard]] AdaptiveMeshFixture<dim> make_adaptive_snapshot(
 
     dealii::CellId refined_parent;
     for (const auto& cell : triangulation->active_cell_iterators()) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
         if (cell->center()[0] < 1.0 && cell->level() > 0) {
             refined_parent = cell->parent()->id();
             break;
@@ -138,9 +143,9 @@ void expect_error_codes(const Result& result, const std::vector<rift::PhaseSuppo
     boost::ut::expect(result.error().size() == expected_codes.size());
     const auto compared = std::min(result.error().size(), expected_codes.size());
     for (std::size_t index = 0; index < compared; ++index) {
-        boost::ut::expect(result.error()[index].code == expected_codes[index]);
-        boost::ut::expect(result.error()[index].rank == 0U);
-        boost::ut::expect(result.error()[index].message.contains("rank 0"));
+        boost::ut::expect(result.error().at(index).code == expected_codes.at(index));
+        boost::ut::expect(result.error().at(index).rank == 0U);
+        boost::ut::expect(result.error().at(index).message.contains("rank 0"));
     }
 }
 
@@ -155,7 +160,7 @@ static_assert(std::is_nothrow_move_assignable_v<rift::PhaseSupportSet<2>>);
 
 } // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char** argv) // NOLINT(readability-function-cognitive-complexity): Boost.UT registration.
 {
     using namespace boost::ut;
 
@@ -169,7 +174,7 @@ int main(int argc, char** argv)
     context_ptr = &actual_context;
     graph_created = graph_result.has_value();
 
-    [[maybe_unused]] const suite<"PhaseSupport"> suite = [] {
+    [[maybe_unused]] const suite<"PhaseSupport"> suite = [] { // NOLINT(readability-function-cognitive-complexity)
         auto& context = *context_ptr;
 
         "empty specifications publish one canonical support per phase in 3D"_test = [&context] {
@@ -187,8 +192,8 @@ int main(int argc, char** argv)
 
             expect(&result->mesh_snapshot() == snapshot.get());
             expect(result->supports().size() == std::size_t{2});
-            expect(result->supports()[0].phase_id() == air_phase());
-            expect(result->supports()[1].phase_id() == water_phase());
+            expect(result->supports().front().phase_id() == air_phase());
+            expect(result->supports().back().phase_id() == water_phase());
             for (const auto& support : result->supports()) {
                 expect(support.requested_cells().empty());
                 expect(support.closure_added_cells().empty());
@@ -202,7 +207,7 @@ int main(int argc, char** argv)
             if (snapshot == nullptr) {
                 return;
             }
-            const auto snapshot_address = snapshot.get();
+            const auto* const snapshot_address = snapshot.get();
             const auto active_cells = locally_owned_active_cells(*snapshot);
             expect(active_cells.size() == std::size_t{4});
             if (active_cells.size() < 4) {
@@ -223,8 +228,8 @@ int main(int argc, char** argv)
             }
 
             expect(&result->mesh_snapshot() == snapshot_address);
-            expect(result->supports()[0].phase_id() == air_phase());
-            expect(result->supports()[1].phase_id() == water_phase());
+            expect(result->supports().front().phase_id() == air_phase());
+            expect(result->supports().back().phase_id() == water_phase());
             expect_cells(result->support(water_phase()).requested_cells(), expected_requested);
             expect(result->support(water_phase()).closure_added_cells().empty());
             expect_cells(result->support(water_phase()).closed_cells(), expected_requested);
@@ -324,8 +329,8 @@ int main(int argc, char** argv)
             expect_error_codes(result, {rift::PhaseSupportErrorCode::missing_phase_specification,
                                         rift::PhaseSupportErrorCode::missing_phase_specification});
             if (!result.has_value()) {
-                expect(result.error()[0].phase == air_phase());
-                expect(result.error()[1].phase == water_phase());
+                expect(result.error().front().phase == air_phase());
+                expect(result.error().back().phase == water_phase());
             }
         };
 
