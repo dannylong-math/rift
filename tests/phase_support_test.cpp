@@ -458,6 +458,26 @@ int main(int argc, char** argv)
             const auto result = context.create_phase_supports<2>({}, std::move(specifications));
             expect_error_codes(result, {rift::PhaseSupportErrorCode::null_mesh});
         };
+
+        "support-set IDs advance only after successful construction"_test = [&context] {
+            const auto snapshot = make_uniform_snapshot<2>(context);
+            if (snapshot == nullptr) {
+                return;
+            }
+
+            const auto first = context.create_phase_supports<2>(snapshot, empty_support_specifications());
+            expect(first.has_value());
+
+            const auto failed = context.create_phase_supports<2>(snapshot, {});
+            expect(not failed.has_value());
+
+            const auto second = context.create_phase_supports<2>(snapshot, empty_support_specifications());
+            expect(second.has_value());
+            if (first.has_value() && second.has_value()) {
+                expect(second->id().value() == first->id().value() + std::uint64_t{1});
+                expect(first->active());
+            }
+        };
     };
 
     const auto result = static_cast<int>(cfg<>.run());

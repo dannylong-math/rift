@@ -61,6 +61,7 @@ static_assert(std::tuple_size_v<PhaseSupportValidationRecord> ==
 
 /** \brief Compare cell IDs without invoking deal.II operations on an invalid ID. */
 struct CellIdLess {
+    /** \brief Order two possibly invalid cell identifiers deterministically. */
     [[nodiscard]] bool operator()(const dealii::CellId& left, const dealii::CellId& right) const noexcept
     {
         const auto left_coarse_cell = left.get_coarse_cell_id();
@@ -156,12 +157,19 @@ void sort_and_deduplicate(PhaseSupportErrors& errors)
 
 /** \brief Serializable representation of one optional-subject public error. */
 struct PhaseSupportErrorWire {
+    /** \brief Error-code representation. */
     std::uint8_t code = 0;
+    /** \brief Offending world rank. */
     unsigned int rank = 0;
+    /** \brief Whether a phase subject exists. */
     bool has_phase = false;
+    /** \brief Optional phase-subject representation. */
     std::uint32_t phase = 0;
+    /** \brief Whether a cell subject exists. */
     bool has_cell = false;
+    /** \brief Optional cell subject. */
     dealii::CellId cell;
+    /** \brief Human-readable diagnostic. */
     std::string message;
 
     /** \brief Serialize the diagnostic for deal.II's generic all-gather. */
@@ -179,7 +187,9 @@ struct PhaseSupportErrorWire {
 
 /** \brief Failure-only payload containing rank metadata and full diagnostics. */
 struct PhaseSupportFailurePacket {
+    /** \brief Fixed validation summary for the source rank. */
     PhaseSupportValidationRecord record{};
+    /** \brief Complete typed diagnostics from the source rank. */
     std::vector<PhaseSupportErrorWire> errors;
 
     /** \brief Serialize all failure detail for deal.II's generic all-gather. */
@@ -328,7 +338,9 @@ template<int dim>
 
 /** \brief Hold the two collective extrema of all fixed validation records. */
 struct PhaseSupportValidationExtrema {
+    /** \brief Field-wise communicator minimum. */
     PhaseSupportValidationRecord minimum;
+    /** \brief Field-wise communicator maximum. */
     PhaseSupportValidationRecord maximum;
 };
 
@@ -402,7 +414,9 @@ struct PhaseSupportValidationExtrema {
 
 /** \brief Canonical rank-local inputs retained after collective validation. */
 template<int dim> struct ValidatedPhaseSupportInputs {
+    /** \brief Validated mesh owner transferred toward construction. */
     std::shared_ptr<const MeshSnapshot<dim>> mesh;
+    /** \brief Canonically ordered validated phase specifications. */
     std::vector<PhaseSupportSpecification> specifications;
 };
 
@@ -434,15 +448,21 @@ validate_phase_support_inputs(const MPI_Comm communicator, const PhaseGraph* pha
 
 /** \brief Describe one active owner or ghost cell in deterministic local order. */
 struct LocalClosureCell {
+    /** \brief Globally meaningful active-cell identity. */
     dealii::CellId id;
+    /** \brief World rank owning this cell. */
     unsigned int owner_rank;
+    /** \brief Whether this rank owns the active cell. */
     bool locally_owned;
+    /** \brief Whether a local fine-side relation references the cell. */
     bool participates_in_closure;
 };
 
 /** \brief Store mesh-local fine-side groups as indices into one cell table. */
 struct LocalClosureTopology {
+    /** \brief Deterministically ordered owner and ghost cells. */
     std::vector<LocalClosureCell> cells;
+    /** \brief Fine-side conformity groups expressed as cell-table indices. */
     std::vector<std::vector<std::size_t>> fine_side_groups;
 };
 
@@ -510,9 +530,13 @@ template<int dim> [[nodiscard]] LocalClosureTopology build_local_closure_topolog
 
 /** \brief Hold packed phase flags on the locally relevant active-cell table. */
 struct LocalPhaseSupportState {
+    /** \brief Mesh-local closure topology. */
     LocalClosureTopology topology;
+    /** \brief Fixed-width phase blocks stored per cell. */
     std::size_t blocks_per_cell;
+    /** \brief Cell-major packed phase-support flags. */
     std::vector<std::uint64_t> phase_flags;
+    /** \brief Owners participating in the sparse ghost exchange. */
     std::vector<unsigned int> ghost_owner_ranks;
 };
 
@@ -696,9 +720,9 @@ std::span<const dealii::CellId> PhaseSupport::closed_cells() const noexcept { re
 
 template<int dim>
     requires(dim == 2 || dim == 3)
-PhaseSupportSet<dim>::PhaseSupportSet(std::shared_ptr<const MeshSnapshot<dim>> mesh,
+PhaseSupportSet<dim>::PhaseSupportSet(const PhaseSupportSetId id, std::shared_ptr<const MeshSnapshot<dim>> mesh,
                                       std::vector<PhaseSupport> supports) noexcept :
-    mesh_(std::move(mesh)), supports_(std::move(supports))
+    id_(id), mesh_(std::move(mesh)), supports_(std::move(supports))
 {
 }
 
@@ -759,7 +783,9 @@ PhaseSupportResult<dim> RiftContext::create_phase_supports(std::shared_ptr<const
         supports.push_back(std::move(support));
     }
 
-    return PhaseSupportSet<dim>(std::move(inputs.mesh), std::move(supports));
+    const auto id = PhaseSupportSetId::from_index(next_phase_support_set_index_);
+    ++next_phase_support_set_index_;
+    return PhaseSupportSet<dim>(id, std::move(inputs.mesh), std::move(supports));
 }
 
 template class PhaseSupportSet<2>;
