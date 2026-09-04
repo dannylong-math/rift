@@ -90,10 +90,7 @@ public:
     [[nodiscard]] MeshSnapshotId id() const noexcept { return id_; }
 
     /** \brief Return a const view of the owned distributed triangulation. */
-    [[nodiscard]] const dealii::parallel::distributed::Triangulation<dim>& triangulation() const noexcept
-    {
-        return *triangulation_;
-    }
+    [[nodiscard]] const dealii::parallel::distributed::Triangulation<dim>& triangulation() const noexcept;
 
     /** \brief Return a const view of the owned mapping. */
     [[nodiscard]] const dealii::Mapping<dim>& mapping() const noexcept { return *mapping_; }

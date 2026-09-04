@@ -118,6 +118,13 @@ MeshSnapshot<dim>::MeshSnapshot(const MeshSnapshotId id,
 
 template<int dim>
     requires(dim == 2 || dim == 3)
+const dealii::parallel::distributed::Triangulation<dim>& MeshSnapshot<dim>::triangulation() const noexcept
+{
+    return *triangulation_;
+}
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
 MeshSnapshotResult<dim>
 RiftContext::create_mesh_snapshot(std::unique_ptr<dealii::parallel::distributed::Triangulation<dim>> triangulation,
                                   std::unique_ptr<dealii::Mapping<dim>> mapping)
@@ -145,5 +152,8 @@ template MeshSnapshotResult<2>
 template MeshSnapshotResult<3>
     RiftContext::create_mesh_snapshot<3>(std::unique_ptr<dealii::parallel::distributed::Triangulation<3>>,
                                          std::unique_ptr<dealii::Mapping<3>>);
+
+template const dealii::parallel::distributed::Triangulation<2>& MeshSnapshot<2>::triangulation() const noexcept;
+template const dealii::parallel::distributed::Triangulation<3>& MeshSnapshot<3>::triangulation() const noexcept;
 
 } // namespace rift

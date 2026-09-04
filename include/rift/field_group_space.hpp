@@ -70,9 +70,9 @@ using FieldSpaceBuildResult = std::expected<void, FieldSpaceBuildErrors>;
  * \brief Own one support-restricted field group's finite-element space.
  *
  * The ordinary finite element is active on the group's closed phase support;
- * the non-dominating `FE_Nothing` is active everywhere else. Moving this
- * object transfers its stable implementation allocation. A moved-from object
- * must not be queried.
+ * the non-dominating `FE_Nothing` is active everywhere else. Move construction
+ * transfers its stable implementation allocation. A moved-from object must
+ * not be queried, and assignment is disabled to preserve object identity.
  *
  * \tparam dim volume-mesh dimension; only 2 and 3 are supported.
  */
@@ -93,8 +93,8 @@ public:
     PhaseSupportFieldGroupSpace& operator=(const PhaseSupportFieldGroupSpace&) = delete;
     /** \brief Move construction transfers the sole implementation owner. */
     PhaseSupportFieldGroupSpace(PhaseSupportFieldGroupSpace&&) noexcept;
-    /** \brief Move assignment transfers the sole implementation owner. */
-    PhaseSupportFieldGroupSpace& operator=(PhaseSupportFieldGroupSpace&&) noexcept;
+    /** \brief Move assignment is disabled to preserve immutable identity. */
+    PhaseSupportFieldGroupSpace& operator=(PhaseSupportFieldGroupSpace&&) = delete;
 
     /** \brief Return the copied canonical descriptor for this field group. */
     [[nodiscard]] const PhaseSupportFieldGroupDescriptor& descriptor() const noexcept;
@@ -135,9 +135,9 @@ private:
 /**
  * \brief Own one background-mesh geometry field group's finite-element space.
  *
- * Its plain `FESystem` is active on the complete mesh. Moving this object
+ * Its plain `FESystem` is active on the complete mesh. Move construction
  * transfers its stable implementation allocation. A moved-from object must
- * not be queried.
+ * not be queried, and assignment is disabled to preserve object identity.
  *
  * \tparam dim volume-mesh dimension; only 2 and 3 are supported.
  */
@@ -153,8 +153,8 @@ public:
     GeometryFieldGroupSpace& operator=(const GeometryFieldGroupSpace&) = delete;
     /** \brief Move construction transfers the sole implementation owner. */
     GeometryFieldGroupSpace(GeometryFieldGroupSpace&&) noexcept;
-    /** \brief Move assignment transfers the sole implementation owner. */
-    GeometryFieldGroupSpace& operator=(GeometryFieldGroupSpace&&) noexcept;
+    /** \brief Move assignment is disabled to preserve immutable identity. */
+    GeometryFieldGroupSpace& operator=(GeometryFieldGroupSpace&&) = delete;
 
     /** \brief Return the copied canonical descriptor for this field group. */
     [[nodiscard]] const GeometryFieldGroupDescriptor& descriptor() const noexcept;

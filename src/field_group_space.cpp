@@ -51,7 +51,9 @@ template<int dim>
 make_phase_support_finite_elements(const PhaseSupportFieldGroupDescriptor& descriptor)
 {
     const dealii::FESystem<dim> ordinary(dealii::FE_Q<dim>(descriptor.degree), descriptor.component_count);
-    const dealii::FE_Nothing<dim> outside_support(descriptor.component_count, false);
+    // Matching FESystem structures let deal.II compare the component-wise
+    // domination rules during hp DoF distribution.
+    const dealii::FESystem<dim> outside_support(dealii::FE_Nothing<dim>(1, false), descriptor.component_count);
     return dealii::hp::FECollection<dim>(ordinary, outside_support);
 }
 
@@ -87,12 +89,15 @@ void build_constraints(const dealii::DoFHandler<dim>& dof_handler, dealii::Index
 {
     locally_relevant_dofs = dealii::DoFTools::extract_locally_relevant_dofs(dof_handler);
     constraints.reinit(dof_handler.locally_owned_dofs(), locally_relevant_dofs);
-    dealii::DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+    if (dof_handler.n_dofs() != 0) {
+        dealii::DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+    }
     constraints.close();
 }
 
 } // namespace
 
+/** \brief Stable implementation storage for one support-restricted field group. */
 template<int dim>
     requires(dim == 2 || dim == 3)
 struct PhaseSupportFieldGroupSpace<dim>::Impl {
@@ -150,11 +155,6 @@ PhaseSupportFieldGroupSpace<dim>::~PhaseSupportFieldGroupSpace() = default;
 template<int dim>
     requires(dim == 2 || dim == 3)
 PhaseSupportFieldGroupSpace<dim>::PhaseSupportFieldGroupSpace(PhaseSupportFieldGroupSpace&&) noexcept = default;
-
-template<int dim>
-    requires(dim == 2 || dim == 3)
-PhaseSupportFieldGroupSpace<dim>&
-PhaseSupportFieldGroupSpace<dim>::operator=(PhaseSupportFieldGroupSpace&&) noexcept = default;
 
 template<int dim>
     requires(dim == 2 || dim == 3)
@@ -226,6 +226,7 @@ const dealii::IndexSet& PhaseSupportFieldGroupSpace<dim>::locally_relevant_dofs(
     return implementation_->locally_relevant_dofs;
 }
 
+/** \brief Stable implementation storage for one background-mesh field group. */
 template<int dim>
     requires(dim == 2 || dim == 3)
 struct GeometryFieldGroupSpace<dim>::Impl {
@@ -291,10 +292,6 @@ GeometryFieldGroupSpace<dim>::~GeometryFieldGroupSpace() = default;
 template<int dim>
     requires(dim == 2 || dim == 3)
 GeometryFieldGroupSpace<dim>::GeometryFieldGroupSpace(GeometryFieldGroupSpace&&) noexcept = default;
-
-template<int dim>
-    requires(dim == 2 || dim == 3)
-GeometryFieldGroupSpace<dim>& GeometryFieldGroupSpace<dim>::operator=(GeometryFieldGroupSpace&&) noexcept = default;
 
 template<int dim>
     requires(dim == 2 || dim == 3)

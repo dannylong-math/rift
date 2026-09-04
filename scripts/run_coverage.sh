@@ -154,8 +154,8 @@ jq '{type, version, data: [.data[] | {totals}]}' \
 # blocks and the Task 06 MPI operational-failure path unreachable through
 # public inputs.
 # Exact locations prevent an unrelated future miss from passing.
-readonly APPROVED_UNCOVERED_LINES=$'src/mesh_snapshot.cpp:54\nsrc/mesh_snapshot.cpp:55\nsrc/phase_graph.cpp:905\nsrc/phase_graph.cpp:906\nsrc/phase_graph.cpp:907\nsrc/phase_graph.cpp:908\nsrc/phase_graph.cpp:909\nsrc/space_draft.cpp:689\nsrc/space_draft.cpp:690\nsrc/space_draft.cpp:691\nsrc/space_draft.cpp:692'
-readonly APPROVED_UNCOVERED_BRANCHES=$'src/mesh_snapshot.cpp:53\nsrc/phase_graph.cpp:903\nsrc/space_draft.cpp:687'
+readonly APPROVED_UNCOVERED_LINES=$'src/mesh_snapshot.cpp:54\nsrc/mesh_snapshot.cpp:55\nsrc/phase_graph.cpp:905\nsrc/phase_graph.cpp:906\nsrc/phase_graph.cpp:907\nsrc/phase_graph.cpp:908\nsrc/phase_graph.cpp:909\nsrc/space_draft.cpp:856\nsrc/space_draft.cpp:857\nsrc/space_draft.cpp:858\nsrc/space_draft.cpp:859'
+readonly APPROVED_UNCOVERED_BRANCHES=$'src/mesh_snapshot.cpp:53\nsrc/phase_graph.cpp:903\nsrc/space_draft.cpp:854'
 
 actual_uncovered_lines="$(
     awk \

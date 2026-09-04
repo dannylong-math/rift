@@ -179,12 +179,13 @@ preflight_field_space_build(const MPI_Comm communicator, const SpaceDraft<dim>& 
 {
     const auto local_record = make_field_space_preflight_record(draft, numbering);
     const auto reference = dealii::Utilities::MPI::broadcast(communicator, local_record, 0);
+    const auto local_state = std::tuple{local_record.at(preflight_index(FieldSpacePreflightField::active)),
+                                        local_record.at(preflight_index(FieldSpacePreflightField::built))};
+    const auto reference_state = std::tuple{reference.at(preflight_index(FieldSpacePreflightField::active)),
+                                            reference.at(preflight_index(FieldSpacePreflightField::built))};
     const std::array<unsigned int, 4> local_flags{{
         static_cast<unsigned int>(draft.active() && !draft.field_spaces_built()),
-        static_cast<unsigned int>(local_record.at(preflight_index(FieldSpacePreflightField::active)) ==
-                                      reference.at(preflight_index(FieldSpacePreflightField::active)) &&
-                                  local_record.at(preflight_index(FieldSpacePreflightField::built)) ==
-                                      reference.at(preflight_index(FieldSpacePreflightField::built))),
+        static_cast<unsigned int>(local_state == reference_state),
         static_cast<unsigned int>(local_record.at(preflight_index(FieldSpacePreflightField::epoch)) ==
                                   reference.at(preflight_index(FieldSpacePreflightField::epoch))),
         static_cast<unsigned int>(local_record.at(preflight_index(FieldSpacePreflightField::numbering)) ==
