@@ -13,6 +13,7 @@
 #include <rift/phase_graph.hpp>
 #include <rift/phase_support.hpp>
 #include <rift/space_draft.hpp>
+#include <rift/space_snapshot.hpp>
 #include <vector>
 
 namespace rift {
@@ -196,6 +197,24 @@ public:
     template<int dim>
         requires(dim == 2 || dim == 3)
     [[nodiscard]] FieldSpaceBuildResult build_field_spaces(SpaceDraft<dim>& draft, FieldSpaceBuildOptions options = {});
+
+    /**
+     * \brief Collectively finalize one built draft into an immutable snapshot.
+     *
+     * Every world rank must call this member in the same order with equivalent
+     * active drafts and regional specifications. Recoverable validation or
+     * agreement errors leave the draft active for a corrected retry. Success
+     * transfers all owned resources and deactivates the draft.
+     *
+     * \tparam dim volume-mesh dimension; only 2 and 3 are supported.
+     * \param draft active context-owned draft with built field spaces.
+     * \param regional_entries optional nonspatial regional scalar requests.
+     * \return shared immutable snapshot or coherent ordered errors on every rank.
+     */
+    template<int dim>
+        requires(dim == 2 || dim == 3)
+    [[nodiscard]] SpaceSnapshotResult<dim>
+    finalize_space(SpaceDraft<dim>& draft, std::vector<RegionalEntrySpecification> regional_entries = {});
 
 private:
     /**

@@ -152,10 +152,13 @@ jq '{type, version, data: [.data[] | {totals}]}' \
 
 # The same-order collective contracts make the defensive Task 04 and Task 08
 # blocks and the Task 06 MPI operational-failure path unreachable through
-# public inputs.
+# public inputs. Task 10 additionally excludes its impossible second-context
+# guard, resource-bound uint64_t/uint32_t overflows, and the wire conversion
+# reachable only from those overflow paths. The reviewer approved the Task 10
+# exclusions on 2026-09-04.
 # Exact locations prevent an unrelated future miss from passing.
-readonly APPROVED_UNCOVERED_LINES=$'src/mesh_snapshot.cpp:54\nsrc/mesh_snapshot.cpp:55\nsrc/phase_graph.cpp:905\nsrc/phase_graph.cpp:906\nsrc/phase_graph.cpp:907\nsrc/phase_graph.cpp:908\nsrc/phase_graph.cpp:909\nsrc/space_draft.cpp:856\nsrc/space_draft.cpp:857\nsrc/space_draft.cpp:858\nsrc/space_draft.cpp:859'
-readonly APPROVED_UNCOVERED_BRANCHES=$'src/mesh_snapshot.cpp:53\nsrc/phase_graph.cpp:903\nsrc/space_draft.cpp:854'
+readonly APPROVED_UNCOVERED_LINES=$'src/mesh_snapshot.cpp:54\nsrc/mesh_snapshot.cpp:55\nsrc/phase_graph.cpp:905\nsrc/phase_graph.cpp:906\nsrc/phase_graph.cpp:907\nsrc/phase_graph.cpp:908\nsrc/phase_graph.cpp:909\nsrc/space_draft.cpp:844\nsrc/space_draft.cpp:845\nsrc/space_draft.cpp:846\nsrc/space_draft.cpp:847\nsrc/space_snapshot.cpp:260\nsrc/space_snapshot.cpp:261\nsrc/space_snapshot.cpp:263\nsrc/space_snapshot.cpp:335\nsrc/space_snapshot.cpp:336\nsrc/space_snapshot.cpp:337\nsrc/space_snapshot.cpp:338\nsrc/space_snapshot.cpp:339\nsrc/space_snapshot.cpp:341\nsrc/space_snapshot.cpp:424\nsrc/space_snapshot.cpp:425\nsrc/space_snapshot.cpp:426\nsrc/space_snapshot.cpp:427\nsrc/space_snapshot.cpp:429\nsrc/space_snapshot.cpp:615\nsrc/space_snapshot.cpp:616\nsrc/space_snapshot.cpp:617\nsrc/space_snapshot.cpp:618\nsrc/space_snapshot.cpp:619\nsrc/space_snapshot.cpp:621\nsrc/space_snapshot.cpp:637\nsrc/space_snapshot.cpp:638\nsrc/space_snapshot.cpp:639\nsrc/space_snapshot.cpp:640\nsrc/space_snapshot.cpp:641\nsrc/space_snapshot.cpp:643'
+readonly APPROVED_UNCOVERED_BRANCHES=$'src/mesh_snapshot.cpp:53\nsrc/phase_graph.cpp:903\nsrc/space_draft.cpp:842\nsrc/space_snapshot.cpp:258\nsrc/space_snapshot.cpp:333\nsrc/space_snapshot.cpp:422\nsrc/space_snapshot.cpp:613\nsrc/space_snapshot.cpp:619\nsrc/space_snapshot.cpp:635\nsrc/space_snapshot.cpp:640'
 
 actual_uncovered_lines="$(
     awk \
@@ -196,7 +199,7 @@ actual_uncovered_branches="$(
 )"
 
 if ! jq -e \
-    '.data[0].totals | (.lines.count - .lines.covered) == 11 and .functions.percent == 100 and .branches.notcovered == 3' \
+    '.data[0].totals | (.lines.count - .lines.covered) == 37 and .functions.percent == 100 and .branches.notcovered == 12' \
     "${BUILD_DIR}/coverage-summary.json" >/dev/null || \
     [[ "${actual_uncovered_lines}" != "${APPROVED_UNCOVERED_LINES}" ]] || \
     [[ "${actual_uncovered_branches}" != "${APPROVED_UNCOVERED_BRANCHES}" ]]; then

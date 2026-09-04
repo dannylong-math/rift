@@ -3,6 +3,8 @@
  * \brief Collective validation and construction of canonical space drafts.
  */
 
+#include "field_space_storage.hpp"
+
 #include <algorithm>
 #include <array>
 #include <boost/serialization/array.hpp>  // IWYU pragma: keep
@@ -34,20 +36,6 @@
 #include <vector>
 
 namespace rift {
-
-namespace detail {
-
-/** \brief Own both canonical field-space categories after atomic commit. */
-template<int dim>
-    requires(dim == 2 || dim == 3)
-struct FieldSpaceStorage {
-    /** \brief Support-restricted spaces in canonical descriptor order. */
-    std::vector<PhaseSupportFieldGroupSpace<dim>> phase_support_fields;
-    /** \brief Geometry spaces in canonical descriptor order. */
-    std::vector<GeometryFieldGroupSpace<dim>> geometry_fields;
-};
-
-} // namespace detail
 
 namespace {
 
@@ -1008,8 +996,12 @@ std::span<const DiscreteGeometryMetadataDescriptor> SpaceSchema::discrete_geomet
 
 template<int dim>
     requires(dim == 2 || dim == 3)
-SpaceDraft<dim>::SpaceDraft(const SpaceEpoch epoch, PhaseSupportSet<dim> phase_supports, SpaceSchema schema) noexcept :
-    epoch_(epoch), phase_supports_(std::move(phase_supports)), schema_(std::move(schema))
+SpaceDraft<dim>::SpaceDraft(const RiftContext* creator_context, const SpaceEpoch epoch,
+                            PhaseSupportSet<dim> phase_supports, SpaceSchema schema) noexcept :
+    creator_context_(creator_context),
+    epoch_(epoch),
+    phase_supports_(std::move(phase_supports)),
+    schema_(std::move(schema))
 {
 }
 
@@ -1020,6 +1012,7 @@ SpaceDraft<dim>::~SpaceDraft() = default;
 template<int dim>
     requires(dim == 2 || dim == 3)
 SpaceDraft<dim>::SpaceDraft(SpaceDraft&& other) noexcept :
+    creator_context_(std::exchange(other.creator_context_, nullptr)),
     epoch_(other.epoch_),
     phase_supports_(std::move(other.phase_supports_)),
     schema_(std::move(other.schema_)),
@@ -1035,6 +1028,7 @@ SpaceDraft<dim>& SpaceDraft<dim>::operator=(SpaceDraft&& other) noexcept
     if (this != &other) {
         // DoF handlers must be destroyed before the mesh snapshot they observe.
         field_spaces_.reset();
+        creator_context_ = std::exchange(other.creator_context_, nullptr);
         epoch_ = other.epoch_;
         phase_supports_ = std::move(other.phase_supports_);
         schema_ = std::move(other.schema_);
@@ -1120,7 +1114,7 @@ SpaceDraftResult<dim> RiftContext::create_space_draft(PhaseSupportSet<dim> phase
                        std::move(canonical.discrete_metadata));
     const auto epoch = SpaceEpoch::from_index(next_space_epoch_index_);
     ++next_space_epoch_index_;
-    return SpaceDraft<dim>(epoch, std::move(phase_supports), std::move(schema));
+    return SpaceDraft<dim>(this, epoch, std::move(phase_supports), std::move(schema));
 }
 
 template<int dim>

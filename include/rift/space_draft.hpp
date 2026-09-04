@@ -363,8 +363,11 @@ private:
     friend class RiftContext;
 
     /** \brief Adopt a validated support set and canonical schema. */
-    SpaceDraft(SpaceEpoch epoch, PhaseSupportSet<dim> phase_supports, SpaceSchema schema) noexcept;
+    SpaceDraft(const RiftContext* creator_context, SpaceEpoch epoch, PhaseSupportSet<dim> phase_supports,
+               SpaceSchema schema) noexcept;
 
+    /** \brief Non-owning identity of the context that created this draft. */
+    const RiftContext* creator_context_;
     /** \brief Context-local provisional space identity. */
     SpaceEpoch epoch_;
     /** \brief Complete support aggregate owned by this draft. */
