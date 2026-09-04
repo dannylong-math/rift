@@ -117,6 +117,7 @@ add_library(rift STATIC
     src/phase_graph.cpp
     src/phase_support.cpp
     src/rift.cpp
+    src/space_draft.cpp
 )
 add_library(rift::rift ALIAS rift)
 
