@@ -13,6 +13,7 @@
 #include <optional>
 #include <rift/mesh_snapshot.hpp>
 #include <rift/phase_graph.hpp>
+#include <rift/strong_id.hpp>
 #include <span>
 #include <string>
 #include <vector>
@@ -20,6 +21,17 @@
 namespace rift {
 
 class RiftContext;
+
+/** \brief Implementation tags for phase-support value types. */
+namespace detail {
+
+/** \brief Distinguish support-set identities from other identifiers. */
+struct PhaseSupportSetIdTag {};
+
+} // namespace detail
+
+/** \brief Identify one successful context-local phase-support construction. */
+using PhaseSupportSetId = StrongId<detail::PhaseSupportSetIdTag, std::uint64_t>;
 
 /**
  * \brief Request owner-local active cells for one canonical phase.
@@ -162,6 +174,12 @@ public:
     /** \brief Move assignment transfers the complete aggregate. */
     PhaseSupportSet& operator=(PhaseSupportSet&&) noexcept = default;
 
+    /** \brief Return this successful support construction's context-local identity. */
+    [[nodiscard]] PhaseSupportSetId id() const noexcept { return id_; }
+
+    /** \brief Report whether this object still owns its mesh and support data. */
+    [[nodiscard]] bool active() const noexcept { return mesh_ != nullptr; }
+
     /** \brief Return a borrowed immutable view of the retained mesh snapshot. */
     [[nodiscard]] const MeshSnapshot<dim>& mesh_snapshot() const noexcept;
 
@@ -181,7 +199,11 @@ private:
     friend class RiftContext;
 
     /** \brief Adopt the validated mesh owner and canonical support records. */
-    PhaseSupportSet(std::shared_ptr<const MeshSnapshot<dim>> mesh, std::vector<PhaseSupport> supports) noexcept;
+    PhaseSupportSet(PhaseSupportSetId id, std::shared_ptr<const MeshSnapshot<dim>> mesh,
+                    std::vector<PhaseSupport> supports) noexcept;
+
+    /** \brief Identity assigned after successful collective construction. */
+    PhaseSupportSetId id_;
 
     /** \brief Retain the exact immutable mesh used during closure. */
     std::shared_ptr<const MeshSnapshot<dim>> mesh_;
