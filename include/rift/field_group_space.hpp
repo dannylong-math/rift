@@ -10,6 +10,7 @@
 #include <deal.II/base/types.h>
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/fe/fe_system.h>
+#include <deal.II/grid/tria.h>
 #include <deal.II/hp/fe_collection.h>
 #include <deal.II/lac/affine_constraints.h>
 #include <expected>
@@ -120,6 +121,11 @@ public:
 private:
     friend class RiftContext;
 
+    /** \brief Build one support-restricted space after collective preflight. */
+    PhaseSupportFieldGroupSpace(PhaseSupportFieldGroupDescriptor descriptor, SpaceEpoch epoch, DofNumbering numbering,
+                                PhaseSupportSetId phase_support_set_id, const PhaseSupport& support,
+                                const dealii::Triangulation<dim>& triangulation);
+
     /** \brief Opaque stable owner of deal.II objects and provenance. */
     struct Impl;
     /** \brief Stable implementation allocation transferred by public moves. */
@@ -170,6 +176,10 @@ public:
 
 private:
     friend class RiftContext;
+
+    /** \brief Build one background-mesh space after collective preflight. */
+    GeometryFieldGroupSpace(GeometryFieldGroupDescriptor descriptor, SpaceEpoch epoch, DofNumbering numbering,
+                            const dealii::Triangulation<dim>& triangulation);
 
     /** \brief Opaque stable owner of deal.II objects and provenance. */
     struct Impl;

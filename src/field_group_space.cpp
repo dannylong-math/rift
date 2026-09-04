@@ -3,23 +3,115 @@
  * \brief Stable implementations for immutable field-group spaces.
  */
 
+#include <algorithm>
 #include <deal.II/base/index_set.h>
+#include <deal.II/dofs/dof_accessor.h>
 #include <deal.II/dofs/dof_handler.h>
+#include <deal.II/dofs/dof_renumbering.h>
+#include <deal.II/dofs/dof_tools.h>
+#include <deal.II/fe/fe_nothing.h>
+#include <deal.II/fe/fe_q.h>
 #include <deal.II/fe/fe_system.h>
+#include <deal.II/grid/cell_id.h>
+#include <deal.II/grid/tria.h>
 #include <deal.II/hp/fe_collection.h>
 #include <deal.II/lac/affine_constraints.h>
+#include <memory>
 #include <rift/field_group_space.hpp>
 #include <rift/phase_graph.hpp>
 #include <rift/phase_support.hpp>
 #include <rift/space_draft.hpp>
+#include <span>
+#include <type_traits>
+#include <utility>
+#include <variant>
 
 namespace rift {
+
+namespace {
+
+/** \brief Compare valid phase-support cell identities in their stored order. */
+struct CellIdLess {
+    /** \brief Apply deal.II's total ordering for valid cell identities. */
+    [[nodiscard]] bool operator()(const dealii::CellId& left, const dealii::CellId& right) const
+    {
+        return left < right;
+    }
+};
+
+/** \brief Test membership in one sorted partition of a phase support. */
+[[nodiscard]] bool contains_cell(const std::span<const dealii::CellId> cells, const dealii::CellId& cell)
+{
+    return std::ranges::binary_search(cells, cell, CellIdLess{});
+}
+
+/** \brief Build the fixed ordinary/outside-support finite-element collection. */
+template<int dim>
+[[nodiscard]] dealii::hp::FECollection<dim>
+make_phase_support_finite_elements(const PhaseSupportFieldGroupDescriptor& descriptor)
+{
+    const dealii::FESystem<dim> ordinary(dealii::FE_Q<dim>(descriptor.degree), descriptor.component_count);
+    const dealii::FE_Nothing<dim> outside_support(descriptor.component_count, false);
+    return dealii::hp::FECollection<dim>(ordinary, outside_support);
+}
+
+/** \brief Select ordinary or outside-support elements on locally owned cells. */
+template<int dim>
+void select_phase_support_finite_elements(dealii::DoFHandler<dim>& dof_handler, const PhaseSupport& support)
+{
+    for (const auto& cell : dof_handler.active_cell_iterators()) {
+        if (!cell->is_locally_owned()) {
+            continue;
+        }
+
+        const auto cell_id = cell->id();
+        const bool is_supported =
+            contains_cell(support.requested_cells(), cell_id) || contains_cell(support.closure_added_cells(), cell_id);
+        cell->set_active_fe_index(is_supported ? PhaseSupportFieldGroupSpace<dim>::ordinary_fe_index
+                                               : PhaseSupportFieldGroupSpace<dim>::outside_support_fe_index);
+    }
+}
+
+/** \brief Apply the selected numbering before dependent objects are created. */
+template<int dim> void apply_numbering(dealii::DoFHandler<dim>& dof_handler, const DofNumbering numbering)
+{
+    if (numbering == DofNumbering::component_wise) {
+        dealii::DoFRenumbering::component_wise(dof_handler);
+    }
+}
+
+/** \brief Retain relevant indices and close hanging-node constraints. */
+template<int dim>
+void build_constraints(const dealii::DoFHandler<dim>& dof_handler, dealii::IndexSet& locally_relevant_dofs,
+                       dealii::AffineConstraints<double>& constraints)
+{
+    locally_relevant_dofs = dealii::DoFTools::extract_locally_relevant_dofs(dof_handler);
+    constraints.reinit(dof_handler.locally_owned_dofs(), locally_relevant_dofs);
+    dealii::DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+    constraints.close();
+}
+
+} // namespace
 
 template<int dim>
     requires(dim == 2 || dim == 3)
 struct PhaseSupportFieldGroupSpace<dim>::Impl {
-    /** \brief Construction is provided with the field-space builder implementation. */
-    Impl() = delete;
+    /** \brief Construct every deal.II object in dependency order. */
+    Impl(PhaseSupportFieldGroupDescriptor field_descriptor, const SpaceEpoch space_epoch,
+         const DofNumbering dof_numbering, const PhaseSupportSetId support_set_id, const PhaseSupport& support,
+         const dealii::Triangulation<dim>& triangulation) :
+        descriptor(std::move(field_descriptor)),
+        epoch(space_epoch),
+        numbering(dof_numbering),
+        phase_support_set_id(support_set_id),
+        finite_elements(make_phase_support_finite_elements<dim>(descriptor)),
+        dof_handler(triangulation)
+    {
+        select_phase_support_finite_elements(dof_handler, support);
+        dof_handler.distribute_dofs(finite_elements);
+        apply_numbering(dof_handler, numbering);
+        build_constraints(dof_handler, locally_relevant_dofs, constraints);
+    }
 
     /** \brief Small canonical descriptor copied from the owning draft. */
     PhaseSupportFieldGroupDescriptor descriptor;
@@ -33,11 +125,23 @@ struct PhaseSupportFieldGroupSpace<dim>::Impl {
     dealii::hp::FECollection<dim> finite_elements;
     /** \brief Distributed DoF handler observing the retained mesh and elements. */
     dealii::DoFHandler<dim> dof_handler;
-    /** \brief Closed hanging-node constraints for this field group. */
-    dealii::AffineConstraints<double> constraints;
     /** \brief Retained locally relevant DoF set. */
     dealii::IndexSet locally_relevant_dofs;
+    /** \brief Closed hanging-node constraints for this field group. */
+    dealii::AffineConstraints<double> constraints;
 };
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
+PhaseSupportFieldGroupSpace<dim>::PhaseSupportFieldGroupSpace(PhaseSupportFieldGroupDescriptor descriptor,
+                                                              const SpaceEpoch epoch, const DofNumbering numbering,
+                                                              const PhaseSupportSetId phase_support_set_id,
+                                                              const PhaseSupport& support,
+                                                              const dealii::Triangulation<dim>& triangulation) :
+    implementation_(
+        std::make_unique<Impl>(std::move(descriptor), epoch, numbering, phase_support_set_id, support, triangulation))
+{
+}
 
 template<int dim>
     requires(dim == 2 || dim == 3)
@@ -125,8 +229,35 @@ const dealii::IndexSet& PhaseSupportFieldGroupSpace<dim>::locally_relevant_dofs(
 template<int dim>
     requires(dim == 2 || dim == 3)
 struct GeometryFieldGroupSpace<dim>::Impl {
-    /** \brief Construction is provided with the field-space builder implementation. */
-    Impl() = delete;
+    /** \brief Construct every deal.II object in dependency order. */
+    Impl(GeometryFieldGroupDescriptor field_descriptor, const SpaceEpoch space_epoch, const DofNumbering dof_numbering,
+         const dealii::Triangulation<dim>& triangulation) :
+        descriptor(std::move(field_descriptor)),
+        epoch(space_epoch),
+        numbering(dof_numbering),
+        finite_element(dealii::FE_Q<dim>(descriptor.degree), descriptor_component_count(descriptor)),
+        dof_handler(triangulation)
+    {
+        dof_handler.distribute_dofs(finite_element);
+        apply_numbering(dof_handler, numbering);
+        build_constraints(dof_handler, locally_relevant_dofs, constraints);
+    }
+
+    /** \brief Return the canonical component count for either geometry binding. */
+    [[nodiscard]] static unsigned int descriptor_component_count(const GeometryFieldGroupDescriptor& descriptor)
+    {
+        return std::visit(
+            [](const auto& components) -> unsigned int {
+                using Components = std::remove_cvref_t<decltype(components)>;
+                if constexpr (std::is_same_v<Components, UnboundFieldComponents>) {
+                    return components.count;
+                }
+                else {
+                    return static_cast<unsigned int>(components.phases.size());
+                }
+            },
+            descriptor.components);
+    }
 
     /** \brief Small canonical descriptor copied from the owning draft. */
     GeometryFieldGroupDescriptor descriptor;
@@ -138,11 +269,20 @@ struct GeometryFieldGroupSpace<dim>::Impl {
     dealii::FESystem<dim> finite_element;
     /** \brief Distributed DoF handler observing the retained mesh and element. */
     dealii::DoFHandler<dim> dof_handler;
-    /** \brief Closed hanging-node constraints for this field group. */
-    dealii::AffineConstraints<double> constraints;
     /** \brief Retained locally relevant DoF set. */
     dealii::IndexSet locally_relevant_dofs;
+    /** \brief Closed hanging-node constraints for this field group. */
+    dealii::AffineConstraints<double> constraints;
 };
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
+GeometryFieldGroupSpace<dim>::GeometryFieldGroupSpace(GeometryFieldGroupDescriptor descriptor, const SpaceEpoch epoch,
+                                                      const DofNumbering numbering,
+                                                      const dealii::Triangulation<dim>& triangulation) :
+    implementation_(std::make_unique<Impl>(std::move(descriptor), epoch, numbering, triangulation))
+{
+}
 
 template<int dim>
     requires(dim == 2 || dim == 3)

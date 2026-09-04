@@ -882,6 +882,8 @@ template<int dim>
 SpaceDraft<dim>& SpaceDraft<dim>::operator=(SpaceDraft&& other) noexcept
 {
     if (this != &other) {
+        // DoF handlers must be destroyed before the mesh snapshot they observe.
+        field_spaces_.reset();
         epoch_ = other.epoch_;
         phase_supports_ = std::move(other.phase_supports_);
         schema_ = std::move(other.schema_);
