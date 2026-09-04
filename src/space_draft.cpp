@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <boost/serialization/array.hpp>  // IWYU pragma: keep
 #include <boost/serialization/string.hpp> // IWYU pragma: keep
 #include <boost/serialization/vector.hpp> // IWYU pragma: keep
 #include <cstddef>
@@ -49,6 +50,155 @@ struct FieldSpaceStorage {
 } // namespace detail
 
 namespace {
+
+/** \brief Fixed rank-local summary for field-space construction preflight. */
+using FieldSpacePreflightRecord = std::array<std::uint64_t, 4>;
+
+/** \brief Position of each value in a field-space preflight record. */
+enum class FieldSpacePreflightField : std::uint8_t {
+    active,
+    built,
+    epoch,
+    numbering,
+};
+
+static_assert(std::tuple_size_v<FieldSpacePreflightRecord> ==
+              static_cast<std::size_t>(FieldSpacePreflightField::numbering) + 1);
+
+/** \brief Convert a preflight field to its fixed record index. */
+[[nodiscard]] constexpr std::size_t preflight_index(const FieldSpacePreflightField field) noexcept
+{
+    return static_cast<std::size_t>(field);
+}
+
+/** \brief Read one boolean field from a fixed preflight record. */
+[[nodiscard]] bool preflight_boolean(const FieldSpacePreflightRecord& record,
+                                     const FieldSpacePreflightField field) noexcept
+{
+    return record.at(preflight_index(field)) != 0;
+}
+
+/** \brief Name a stored numbering representation for a diagnostic. */
+[[nodiscard]] std::string format_numbering(const std::uint64_t numbering)
+{
+    if (numbering == static_cast<std::uint64_t>(DofNumbering::native)) {
+        return "native";
+    }
+    if (numbering == static_cast<std::uint64_t>(DofNumbering::component_wise)) {
+        return "component_wise";
+    }
+    return std::format("unknown ({})", numbering);
+}
+
+/** \brief Append one typed field-space preflight diagnostic. */
+void add_field_space_error(FieldSpaceBuildErrors& errors, const FieldSpaceBuildErrorCode code, const unsigned int rank,
+                           std::string message)
+{
+    errors.push_back({.code = code, .rank = rank, .message = std::move(message)});
+}
+
+/** \brief Order field-space diagnostics by rank, code, then message. */
+void sort_field_space_errors(FieldSpaceBuildErrors& errors)
+{
+    std::ranges::sort(errors, [](const FieldSpaceBuildError& left, const FieldSpaceBuildError& right) {
+        return std::tie(left.rank, left.code, left.message) < std::tie(right.rank, right.code, right.message);
+    });
+}
+
+/** \brief Describe one draft and numbering request with constant-size data. */
+template<int dim>
+[[nodiscard]] FieldSpacePreflightRecord make_field_space_preflight_record(const SpaceDraft<dim>& draft,
+                                                                          const DofNumbering numbering)
+{
+    return FieldSpacePreflightRecord{{
+        static_cast<std::uint64_t>(draft.active()),
+        static_cast<std::uint64_t>(draft.field_spaces_built()),
+        draft.epoch().value(),
+        static_cast<std::uint64_t>(numbering),
+    }};
+}
+
+/** \brief Derive complete deterministic diagnostics after failed preflight. */
+[[nodiscard]] FieldSpaceBuildErrors collect_field_space_preflight_errors(const MPI_Comm communicator,
+                                                                         const FieldSpacePreflightRecord& local_record)
+{
+    const auto records = dealii::Utilities::MPI::all_gather(communicator, local_record);
+    const auto& reference = records.front();
+    FieldSpaceBuildErrors errors;
+
+    for (std::size_t rank_index = 0; rank_index < records.size(); ++rank_index) {
+        const auto rank = static_cast<unsigned int>(rank_index);
+        const auto& record = records.at(rank_index);
+        const auto active = preflight_boolean(record, FieldSpacePreflightField::active);
+        const auto built = preflight_boolean(record, FieldSpacePreflightField::built);
+
+        if (!active) {
+            add_field_space_error(errors, FieldSpaceBuildErrorCode::inactive_draft, rank,
+                                  std::format("rank {} supplied an inactive or moved-from space draft", rank));
+        }
+        if (built) {
+            add_field_space_error(errors, FieldSpaceBuildErrorCode::field_spaces_already_built, rank,
+                                  std::format("rank {} supplied a draft whose field spaces are already built", rank));
+        }
+
+        if (active != preflight_boolean(reference, FieldSpacePreflightField::active) ||
+            built != preflight_boolean(reference, FieldSpacePreflightField::built)) {
+            add_field_space_error(
+                errors, FieldSpaceBuildErrorCode::collective_draft_state_mismatch, rank,
+                std::format("rank {} supplied draft state {{active={}, built={}}}, but rank 0 supplied "
+                            "{{active={}, built={}}}",
+                            rank, active, built, preflight_boolean(reference, FieldSpacePreflightField::active),
+                            preflight_boolean(reference, FieldSpacePreflightField::built)));
+        }
+
+        const auto epoch = record.at(preflight_index(FieldSpacePreflightField::epoch));
+        const auto reference_epoch = reference.at(preflight_index(FieldSpacePreflightField::epoch));
+        if (epoch != reference_epoch) {
+            add_field_space_error(
+                errors, FieldSpaceBuildErrorCode::collective_space_epoch_mismatch, rank,
+                std::format("rank {} supplied space epoch {}, but rank 0 supplied {}", rank, epoch, reference_epoch));
+        }
+
+        const auto numbering = record.at(preflight_index(FieldSpacePreflightField::numbering));
+        const auto reference_numbering = reference.at(preflight_index(FieldSpacePreflightField::numbering));
+        if (numbering != reference_numbering) {
+            add_field_space_error(errors, FieldSpaceBuildErrorCode::collective_dof_numbering_mismatch, rank,
+                                  std::format("rank {} requested DoF numbering '{}', but rank 0 requested '{}'", rank,
+                                              format_numbering(numbering), format_numbering(reference_numbering)));
+        }
+    }
+
+    sort_field_space_errors(errors);
+    return errors;
+}
+
+/** \brief Enforce the fixed collective contract before entering deal.II. */
+template<int dim>
+[[nodiscard]] FieldSpaceBuildResult
+preflight_field_space_build(const MPI_Comm communicator, const SpaceDraft<dim>& draft, const DofNumbering numbering)
+{
+    const auto local_record = make_field_space_preflight_record(draft, numbering);
+    const auto reference = dealii::Utilities::MPI::broadcast(communicator, local_record, 0);
+    const std::array<unsigned int, 4> local_flags{{
+        static_cast<unsigned int>(draft.active() && !draft.field_spaces_built()),
+        static_cast<unsigned int>(local_record.at(preflight_index(FieldSpacePreflightField::active)) ==
+                                      reference.at(preflight_index(FieldSpacePreflightField::active)) &&
+                                  local_record.at(preflight_index(FieldSpacePreflightField::built)) ==
+                                      reference.at(preflight_index(FieldSpacePreflightField::built))),
+        static_cast<unsigned int>(local_record.at(preflight_index(FieldSpacePreflightField::epoch)) ==
+                                  reference.at(preflight_index(FieldSpacePreflightField::epoch))),
+        static_cast<unsigned int>(local_record.at(preflight_index(FieldSpacePreflightField::numbering)) ==
+                                  reference.at(preflight_index(FieldSpacePreflightField::numbering))),
+    }};
+    std::array<unsigned int, 4> global_flags{};
+    dealii::Utilities::MPI::min(dealii::make_array_view(local_flags), communicator,
+                                dealii::make_array_view(global_flags));
+
+    if (std::ranges::any_of(global_flags, [](const unsigned int flag) { return flag == 0; })) {
+        return std::unexpected(collect_field_space_preflight_errors(communicator, local_record));
+    }
+    return {};
+}
 
 /** \brief Serialization-friendly form of geometry component semantics. */
 struct GeometryFieldComponentsWire {
@@ -972,10 +1122,44 @@ SpaceDraftResult<dim> RiftContext::create_space_draft(PhaseSupportSet<dim> phase
     return SpaceDraft<dim>(epoch, std::move(phase_supports), std::move(schema));
 }
 
+template<int dim>
+    requires(dim == 2 || dim == 3)
+FieldSpaceBuildResult RiftContext::build_field_spaces(SpaceDraft<dim>& draft, const FieldSpaceBuildOptions options)
+{
+    auto preflight = preflight_field_space_build(mpi_communicator(), draft, options.numbering);
+    if (!preflight.has_value()) {
+        return std::unexpected(std::move(preflight.error()));
+    }
+
+    auto field_spaces = std::make_unique<detail::FieldSpaceStorage<dim>>();
+    const auto& phase_supports = draft.phase_supports();
+    const auto& triangulation = phase_supports.mesh_snapshot().triangulation();
+
+    const auto support_descriptors = draft.canonical_schema().phase_support_fields();
+    field_spaces->phase_support_fields.reserve(support_descriptors.size());
+    for (const auto& descriptor : support_descriptors) {
+        field_spaces->phase_support_fields.push_back(
+            PhaseSupportFieldGroupSpace<dim>(descriptor, draft.epoch(), options.numbering, phase_supports.id(),
+                                             phase_supports.support(descriptor.phase), triangulation));
+    }
+
+    const auto geometry_descriptors = draft.canonical_schema().geometry_fields();
+    field_spaces->geometry_fields.reserve(geometry_descriptors.size());
+    for (const auto& descriptor : geometry_descriptors) {
+        field_spaces->geometry_fields.push_back(
+            GeometryFieldGroupSpace<dim>(descriptor, draft.epoch(), options.numbering, triangulation));
+    }
+
+    draft.field_spaces_ = std::move(field_spaces);
+    return {};
+}
+
 template class SpaceDraft<2>;
 template class SpaceDraft<3>;
 
 template SpaceDraftResult<2> RiftContext::create_space_draft<2>(PhaseSupportSet<2>, SpaceSpecification);
 template SpaceDraftResult<3> RiftContext::create_space_draft<3>(PhaseSupportSet<3>, SpaceSpecification);
+template FieldSpaceBuildResult RiftContext::build_field_spaces<2>(SpaceDraft<2>&, FieldSpaceBuildOptions);
+template FieldSpaceBuildResult RiftContext::build_field_spaces<3>(SpaceDraft<3>&, FieldSpaceBuildOptions);
 
 } // namespace rift
