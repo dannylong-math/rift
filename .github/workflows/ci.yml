@@ -74,16 +74,17 @@ jobs:
           -DCMAKE_BUILD_TYPE=Debug
           -DBUILD_TESTING=ON
           -DENABLE_SANITIZERS=OFF
+          -DMPIEXEC_PREFLAGS=--oversubscribe
 
       - name: Build
         run: cmake --build build/ci --parallel 2
 
       - name: Run unit tests
-        run: ctest --test-dir build/ci --output-on-failure
+        run: ctest --test-dir build/ci --parallel 1 --output-on-failure
 
   coverage:
     name: Coverage
-    needs: tests
+    needs: [tests, clang-coverage]
     runs-on: ubuntu-24.04
 
     steps:
@@ -132,12 +133,13 @@ jobs:
           -DBUILD_TESTING=ON
           -DENABLE_SANITIZERS=OFF
           -DENABLE_COVERAGE=ON
+          -DMPIEXEC_PREFLAGS=--oversubscribe
 
       - name: Build
         run: cmake --build build/coverage --parallel 2
 
       - name: Run unit tests
-        run: ctest --test-dir build/coverage --output-on-failure
+        run: ctest --test-dir build/coverage --parallel 1 --output-on-failure
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -157,7 +159,7 @@ jobs:
             --output coverage-raw-summary.json \
             build/coverage
 
-          printf 'Policy-adjusted GCC coverage:\n'
+          printf 'GCC line/function gates (raw branches retained for diagnostics):\n'
           gcovr \
             --root . \
             --filter 'include/rift/' \
@@ -165,7 +167,6 @@ jobs:
             --print-summary \
             --fail-under-line 100 \
             --fail-under-function 100 \
-            --fail-under-branch 100 \
             --json-summary-pretty \
             --json-summary coverage-summary.json \
             --cobertura-pretty \
@@ -181,6 +182,9 @@ jobs:
               sys.exit("error: GCC coverage contains no first-party executable lines or functions")
           if summary["branch_total"] == 0:
               print("branches: not applicable (0 branches)")
+          else:
+              print(f"branches: {summary['branch_covered']}/{summary['branch_total']} "
+                    "(diagnostic only; Clang enforces source branch coverage)")
           PY
 
       - name: Upload coverage to Codecov
@@ -190,3 +194,55 @@ jobs:
           files: ./coverage.xml
           disable_search: true
           fail_ci_if_error: true
+
+  clang-coverage:
+    name: Clang coverage
+    needs: tests
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install build and coverage prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential \
+            clang \
+            cmake \
+            curl \
+            jq \
+            libopenmpi-dev \
+            llvm \
+            ninja-build
+
+      - name: Restore scientific dependencies
+        id: scientific-dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            .dependencies/downloads
+            .dependencies/install
+          key: scientific-dependencies-${{ runner.os }}-${{ runner.arch }}-Debug-Clang-${{ hashFiles('scripts/install_dependencies.sh') }}
+
+      - name: Build scientific dependencies
+        if: steps.scientific-dependencies.outputs.cache-hit != 'true'
+        env:
+          CC: clang
+          CXX: clang++
+          OMPI_CC: clang
+          OMPI_CXX: clang++
+        run: >-
+          ./scripts/install_dependencies.sh
+          --science-only
+          --variant debug
+          --jobs 2
+
+      - name: Configure Clang coverage
+        run: cmake --preset clang-coverage -DMPIEXEC_PREFLAGS=--oversubscribe
+
+      - name: Run Clang coverage gate
+        env:
+          RIFT_COVERAGE_JOBS: 2
+        run: ./scripts/run_coverage.sh clang

@@ -1,9 +1,28 @@
 # Rift
 
 Rift is a C++23 research library for sharp-interface multiphase flow. The library
-is being redesigned; its current public API contains only semantic version
-information. The scientific dependency setup, build presets, tests, coverage,
-and documentation pipeline remain available for new development.
+is being redesigned; its current public API provides semantic version
+information and a shared context handle. The scientific dependency setup,
+build presets, tests, coverage, and documentation pipeline remain available
+for new development.
+
+Create a context at the beginning of `main()` and pass copies to Rift objects:
+
+```cpp
+#include <rift/context.hpp>
+
+int main(int argc, char **argv)
+{
+    auto ctx = rift::make_context(argc, argv);
+    // Create and destroy dependent Rift objects while ctx remains alive.
+}
+```
+
+The handle shares MPI lifetime, logging, rank-zero output, a wall-time timer,
+and a local phase-index counter. Phase registration does not communicate;
+timer sections synchronize across the context communicator. Logging policy
+is still under design, and timer output is disabled by default. Keep the
+original handle in `main()` until dependent objects and worker activity finish.
 
 The previous foundation implementation is preserved at Git tag
 `reference/pre-reset-status`. It is historical reference, not a required
@@ -59,13 +78,14 @@ The debug preset enables AddressSanitizer and UndefinedBehaviorSanitizer.
 Each `tests/*_test.cpp` file is automatically built as one same-named CTest using
 Catch2 3.16.0. The retained MPI test infrastructure builds each `tests/mpi/*_test.cpp`
 file once and registers it as one-, two-, and three-rank CTests using the MPI
-launcher selected by CMake. There are currently no MPI-dependent library APIs
-or MPI tests.
+launcher selected by CMake. The context test covers shared services and local
+phase registration at all three process counts.
 
 ## Continuous integration and coverage
 
-Pull requests run the unit tests with GCC and Clang. A GCC coverage build uses
-gcovr to produce a Cobertura report and uploads it to Codecov. A nightly smoke
+Pull requests run the unit tests and coverage checks with GCC and Clang.
+Clang source-based coverage provides the required branch gate. GCC uses gcovr
+to produce a Cobertura report and uploads it to Codecov. A nightly smoke
 workflow restores both compiler-specific deal.II caches and rebuilds them only
 if GitHub no longer has them.
 
@@ -76,8 +96,11 @@ Run compiler-specific coverage checks locally with:
 ./scripts/run_coverage.sh clang
 ```
 
-Coverage requires 100 percent of first-party lines, functions, and branches;
-see [contribution guidance](AGENTS.md) for dependencies and report locations.
+Coverage requires 100 percent of first-party lines and functions with both
+compilers, plus 100 percent of Clang's source branches. GCC raw branch counts
+remain visible as diagnostics without a percentage gate or source exclusions
+for generated cleanup paths. See [contribution guidance](AGENTS.md) for the
+policy, dependencies, and report locations.
 
 ## Documentation
 

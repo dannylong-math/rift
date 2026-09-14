@@ -3,9 +3,10 @@
 ## Current scope
 
 - Rift is a C++23 research library for sharp-interface multiphase flow.
-- The library is being redesigned. Its only current public API is semantic
-  version information in `rift/version.hpp`; foundation APIs and tutorials have
-  been removed. Do not present historical designs as implemented behavior.
+- The library is being redesigned. Its current public APIs are semantic
+  version information in `rift/version.hpp` and the shared context handle in
+  `rift/context.hpp`; previous foundation APIs and tutorials have been removed.
+  Do not present historical designs as implemented behavior.
 - The previous implementation is preserved at Git tag
   `reference/pre-reset-status`. Consult it with
   `git show reference/pre-reset-status:<path>` or list its files with
@@ -64,7 +65,15 @@
   sources and registers each executable through CMake's `MPIEXEC_*` variables
   at one, two, and three ranks. MPI test executables link `Catch2::Catch2` and
   provide an MPI-aware `main` that runs `Catch::Session`; do not introduce
-  custom MPI wrappers or test registries. There are currently no MPI tests.
+  custom MPI wrappers or test registries. The context test creates its Rift
+  context around `Catch::Session` so the context owns MPI initialization and
+  finalization.
+- GitHub CI uses Open MPI with `-DMPIEXEC_PREFLAGS=--oversubscribe` and runs
+  CTest with `--parallel 1`, allowing the three-rank test on two-core runners.
+  Keep MPI unit tests small in memory and runtime; oversubscribed runs provide
+  correctness evidence, not performance evidence. Keep this launcher flag in
+  the Open MPI CI configurations rather than shared presets, since local MPI
+  implementations may not support it.
 - Run one test with:
 
   ```console
@@ -80,8 +89,20 @@
 ## Coverage
 
 - Coverage scope is first-party code under `include/rift/` and `src/`.
-- Required line, function, and branch coverage are each 100 percent for
-  in-scope work. Coverage is a gate, not evidence that test oracles are strong.
+- GCC and Clang must both pass builds and tests and achieve 100 percent line
+  and function coverage for in-scope work. Clang source-based branch coverage
+  must also be 100 percent and is the authoritative branch gate.
+- Report GCC raw branch coverage without a percentage gate. GCC includes
+  compiler-generated exception and cleanup edges; retain these counts without
+  filtering or marking source lines merely to reach a percentage. This
+  compiler-specific policy supersedes a blanket requirement for 100 percent
+  GCC branches.
+- Coverage is a gate, not evidence that test oracles are strong. Test documented
+  failure behavior, state preservation, and custom resource cleanup explicitly.
+  Keep independent oracles and sanitizer checks. Source exclusions remain
+  exceptional: require a narrowly identified, demonstrably unreachable path,
+  written justification, source location, tool-specific suppression, and user
+  review approval.
 - Create the ignored project-local coverage environment with:
 
   ```console
@@ -101,11 +122,12 @@
   policy-adjusted metrics and Cobertura are in `coverage-summary.json` and
   `coverage.xml` in that directory. Clang writes `coverage.json`,
   `coverage.lcov`, and `coverage-summary.json` under `build/clang-coverage/`.
-  Both commands require nonempty first-party line/function coverage and check
-  line, function, and branch coverage. The version-only baseline has no
-  branches to exercise; a zero branch denominator is reported as not
-  applicable. There are no approved coverage exclusions for the baseline, so
-  raw and policy-adjusted metrics are identical.
+  Both commands run CTest with `--parallel 1`, require nonempty first-party
+  line/function coverage, and enforce their compiler-specific gates above.
+  Clang source discovery includes nested headers and source files. A zero
+  branch denominator is reported as not applicable. There are no approved
+  coverage exclusions, so raw and policy-adjusted metrics are identical;
+  diagnostic GCC branches remain in the JSON and Cobertura reports.
 
 - Build the isolated GCC scientific dependencies once, with the system OpenMPI
   wrappers selected consistently across C, C++, Fortran, and the launcher:
@@ -123,7 +145,11 @@
   ```
 
 - `.github/workflows/ci.yml` runs the full GCC and Clang unit-test matrix on
-  every pull request and uploads the GCC report to Codecov. Keep this path
+  every pull request, then the Clang coverage gate. The existing `Coverage`
+  job depends on the Clang gate, enforces GCC line/function coverage, and
+  uploads the unfiltered GCC report to Codecov. Clang CI reuses
+  `./scripts/run_coverage.sh clang` with `RIFT_COVERAGE_JOBS=2` and configures
+  the preset with `-DMPIEXEC_PREFLAGS=--oversubscribe`. Keep this path
   simple; do not add custom profile mergers, manifest generators, or parallel
   coverage runners unless a demonstrated limitation requires one.
 - `.github/workflows/cache-keepalive.yml` restores the GCC and Clang scientific
