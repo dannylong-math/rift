@@ -83,8 +83,9 @@ phase registration at all three process counts.
 
 ## Continuous integration and coverage
 
-Pull requests run the unit tests with GCC and Clang. A GCC coverage build uses
-gcovr to produce a Cobertura report and uploads it to Codecov. A nightly smoke
+Pull requests run the unit tests and coverage checks with GCC and Clang.
+Clang source-based coverage provides the required branch gate. GCC uses gcovr
+to produce a Cobertura report and uploads it to Codecov. A nightly smoke
 workflow restores both compiler-specific deal.II caches and rebuilds them only
 if GitHub no longer has them.
 
@@ -95,8 +96,11 @@ Run compiler-specific coverage checks locally with:
 ./scripts/run_coverage.sh clang
 ```
 
-Coverage requires 100 percent of first-party lines, functions, and branches;
-see [contribution guidance](AGENTS.md) for dependencies and report locations.
+Coverage requires 100 percent of first-party lines and functions with both
+compilers, plus 100 percent of Clang's source branches. GCC raw branch counts
+remain visible as diagnostics without a percentage gate or source exclusions
+for generated cleanup paths. See [contribution guidance](AGENTS.md) for the
+policy, dependencies, and report locations.
 
 ## Documentation
 

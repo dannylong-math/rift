@@ -42,7 +42,7 @@ if [[ "${COVERAGE_KIND}" == "gcc" ]]; then
         die "gcovr 8.6 is missing; install it with .venv/bin/python -m pip install gcovr==8.6"
 
     find "${BUILD_DIR}" -type f -name '*.gcda' -delete
-    ctest --preset "${PRESET}" --output-on-failure
+    ctest --preset "${PRESET}" --parallel 1 --output-on-failure
 
     printf 'Raw GCC coverage:\n'
     "${GCOVR}" \
@@ -54,7 +54,7 @@ if [[ "${COVERAGE_KIND}" == "gcc" ]]; then
         --output "${BUILD_DIR}/coverage-raw-summary.json" \
         "${BUILD_DIR}"
 
-    printf 'Policy-adjusted GCC coverage:\n'
+    printf 'GCC line/function gates (raw branches retained for diagnostics):\n'
     "${GCOVR}" \
         --root "${REPOSITORY_ROOT}" \
         --filter 'include/rift/' \
@@ -62,7 +62,6 @@ if [[ "${COVERAGE_KIND}" == "gcc" ]]; then
         --print-summary \
         --fail-under-line 100 \
         --fail-under-function 100 \
-        --fail-under-branch 100 \
         --json-summary-pretty \
         --json-summary "${BUILD_DIR}/coverage-summary.json" \
         --cobertura-pretty \
@@ -78,6 +77,9 @@ if summary["line_total"] == 0 or summary["function_total"] == 0:
     sys.exit("error: GCC coverage contains no first-party executable lines or functions")
 if summary["branch_total"] == 0:
     print("branches: not applicable (0 branches)")
+else:
+    print(f"branches: {summary['branch_covered']}/{summary['branch_total']} "
+          "(diagnostic only; Clang enforces source branch coverage)")
 PY_COVERAGE
     exit 0
 fi
@@ -85,7 +87,7 @@ fi
 readonly PROFILE_DIR="${BUILD_DIR}/profiles"
 cmake -E make_directory "${PROFILE_DIR}"
 find "${PROFILE_DIR}" -type f -name '*.profraw' -delete
-ctest --preset "${PRESET}" --output-on-failure
+ctest --preset "${PRESET}" --parallel 1 --output-on-failure
 
 readonly CLANG_MAJOR="$(clang++ --version | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p' | head -n 1)"
 
@@ -122,9 +124,10 @@ for test_source in \
 done
 (( ${#test_objects[@]} > 0 )) || die "no coverage test executables were found"
 
-coverage_sources=(
-    "${REPOSITORY_ROOT}"/include/rift/*.hpp
-    "${REPOSITORY_ROOT}"/src/*.cpp
+mapfile -d '' -t coverage_sources < <(
+    find "${REPOSITORY_ROOT}/include/rift" "${REPOSITORY_ROOT}/src" \
+        -type f \( -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.hxx' \
+        -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' \) -print0
 )
 (( ${#coverage_sources[@]} > 0 )) || die "no first-party coverage sources were found"
 
@@ -158,7 +161,7 @@ printf 'Raw Clang coverage:\n'
 jq '{type, version, data: [.data[] | {totals}]}' \
     "${COVERAGE_DATA}" > "${BUILD_DIR}/coverage-summary.json"
 
-# There are no approved coverage exclusions in the reset library. Compare
+# Clang source-based coverage is the authoritative branch gate. Compare
 # counts instead of percentages: a branch-free library has no missed branches,
 # but reporting 100 percent branch coverage would hide the empty denominator.
 if ! jq -e '

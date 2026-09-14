@@ -38,8 +38,10 @@ ctest --preset debug -R '^version_test$' --output-on-failure
 
 The retained MPI infrastructure discovers each `tests/mpi/*_test.cpp` source and
 registers one-, two-, and three-rank CTests through CMake's selected launcher.
-There are currently no MPI tests. Future MPI tests link `Catch2::Catch2` and
-provide an MPI-aware `main` that runs `Catch::Session`.
+MPI tests link `Catch2::Catch2` and provide an MPI-aware `main` that runs
+`Catch::Session`. The context test creates its context around the session.
+CI runs small MPI tests sequentially with Open MPI oversubscription enabled
+so three ranks can run on a two-core runner.
 
 ```console
 ctest --preset debug -L mpi --output-on-failure
@@ -47,10 +49,20 @@ ctest --preset debug -L mpi --output-on-failure
 
 ## Coverage
 
-Pull requests run a GCC coverage build after the GCC and Clang unit tests pass.
-gcovr 8.6 checks line, function, and branch coverage for first-party code under
-`include/rift/` and `src/`, writes `coverage.xml` in Cobertura format, and the
-workflow uploads that file to Codecov.
+Pull requests run Clang and GCC coverage checks after the GCC and Clang unit
+tests pass. Coverage scope is first-party code under `include/rift/` and `src/`,
+including nested directories.
+
+| Compiler | Required coverage | Diagnostic coverage |
+| --- | --- | --- |
+| GCC | 100% lines and functions | Raw branches, without a percentage gate |
+| Clang | 100% lines, functions, and source branches | Full source-based report |
+
+Clang is the authoritative branch gate. GCC counts compiler-generated
+exception and cleanup edges as branches; keep those counts visible without
+adding exclusions to routine source lines. gcovr 8.6 writes the unfiltered GCC
+report as `coverage.xml` in Cobertura format for Codecov. The existing
+`Coverage` CI job depends on the Clang coverage job, so both must pass.
 
 Run compiler-specific coverage reports locally with:
 
@@ -62,12 +74,15 @@ Run compiler-specific coverage reports locally with:
 The scripts use the matching coverage presets and write reports under
 `build/gcc-coverage/` and `build/clang-coverage/`. GCC requires the isolated
 scientific dependency stack in `.dependencies-gcc/`; see the repository's
-`AGENTS.md` for the setup commands. The version-only baseline has no branches
-and no coverage exclusions.
+`AGENTS.md` for the setup commands. Both scripts run tests sequentially. Zero
+instrumented branches are reported as not applicable, not as 100% coverage.
+There are no approved exclusions; raw and policy-adjusted metrics coincide.
 
-The three coverage thresholds are 100 percent for in-scope code. Coverage is a
-useful completeness check, but meaningful independent test oracles remain
-necessary.
+Coverage is a useful completeness check, but meaningful independent test
+oracles remain necessary. Test documented failures, state preservation, and
+custom cleanup explicitly; keep sanitizer checks. Source exclusions require
+a narrow, demonstrably unreachable path, written justification, source
+location, tool-specific suppression, and user review approval.
 
 The nightly dependency-cache smoke workflow restores the same GCC and Clang
 caches used by pull requests, rebuilding only after a cache miss, and then runs
