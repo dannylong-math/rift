@@ -3,12 +3,19 @@
 ## Current scope
 
 - Rift is a C++23 research library for sharp-interface multiphase flow.
-- This branch implements the Milestone 001 foundation surface: the world-only
-  `RiftContext`, immutable phase graph, mesh, support, space, and state
-  lifecycles, transactional publication, and rank-aware logging. Do not present
-  later solver or geometry-classification designs as implemented behavior.
+- The library is being redesigned. Its only current public API is semantic
+  version information in `rift/version.hpp`; foundation APIs and tutorials have
+  been removed. Do not present historical designs as implemented behavior.
+- The previous implementation is preserved at Git tag
+  `reference/pre-reset-status`. Consult it with
+  `git show reference/pre-reset-status:<path>` or list its files with
+  `git ls-tree -r --name-only reference/pre-reset-status`. Its architecture and
+  APIs are historical reference, not requirements for the redesign.
+- `docs/development/foundations/` and
+  `docs/development/first-pde-demonstration/` contain archived plans, not active
+  implementation instructions.
 - The scientific dependency stack is deal.II 9.8.0, simdutf 9.0.0, spdlog
-  1.17.0, p4est 2.8.7, zlib 1.3.1, and MPI. Unit tests use Boost.UT 2.3.1, and
+  1.17.0, p4est 2.8.7, zlib 1.3.1, and MPI. Unit tests use Catch2 3.16.0, and
   Sourcey 3.6.5 builds the documentation.
 - Rift is pre-release software. Source and ABI compatibility are not yet gates,
   but update every in-repository caller, test, and document with an API change.
@@ -40,21 +47,24 @@
 
 ## Tests
 
-- `tests/CMakeLists.txt` non-recursively discovers every `tests/*.cpp` file and
+- `tests/CMakeLists.txt` non-recursively discovers every `tests/*_test.cpp` file and
   creates one executable and one same-named CTest for it. Adding a normal test
-  requires only a new `.cpp` file in that directory.
-- All C++ unit tests use Boost.UT. Define named `_test` cases directly in each
-  test source and use `expect()` assertions with meaningful comparisons. Do not
-  use `assert`, whose checks disappear in Release builds.
+  requires only a new `*_test.cpp` file in that directory.
+- All C++ unit tests use Catch2 3.16.0. Include
+  `<catch2/catch_test_macros.hpp>`, define named `TEST_CASE` cases, and use
+  `CHECK` or `REQUIRE` with meaningful comparisons. Ordinary test executables
+  link `Catch2::Catch2WithMain`; do not supply a separate `main`. Do not use
+  `assert`, whose checks disappear in Release builds.
 - Keep each test source self-contained. Do not recreate the previous physical
   registration headers, subject-runner modes, or test registries.
 - Name tests after the behavior or public object they verify, using a `_test.cpp`
   suffix. Keep independent oracles and cover failure behavior as well as the
   expected path.
-- `tests/mpi/*.cpp` sources are non-recursively discovered as self-contained
-  Boost.UT executables. Each executable is registered through CMake's
-  `MPIEXEC_*` variables at one, two, and three ranks; do not introduce custom
-  MPI wrappers or test registries.
+- The retained MPI infrastructure non-recursively discovers `tests/mpi/*_test.cpp`
+  sources and registers each executable through CMake's `MPIEXEC_*` variables
+  at one, two, and three ranks. MPI test executables link `Catch2::Catch2` and
+  provide an MPI-aware `main` that runs `Catch::Session`; do not introduce
+  custom MPI wrappers or test registries. There are currently no MPI tests.
 - Run one test with:
 
   ```console
@@ -66,13 +76,6 @@
   ```console
   ctest --preset debug -L mpi --output-on-failure
   ```
-
-- Tutorial sources live under `tutorials/` and are built by default. Run the
-  foundation tutorial with `./build/debug/tutorials/rift_tutorial_01_foundations`
-  or through the configured MPI launcher at multiple ranks. Debug and Release
-  register it as one- and two-rank CTests; coverage presets intentionally set
-  `BUILD_TUTORIALS=OFF` so tutorial-only inline instantiations are outside the
-  first-party library coverage denominator.
 
 ## Coverage
 
@@ -86,21 +89,23 @@
   .venv/bin/python -m pip install gcovr==8.6
   ```
 
-- The supported coverage commands are compiler-specific presets wrapped by one
-  script. GCC uses an isolated GCC-built deal.II stack under
-  `.dependencies-gcc/`, preserves raw metrics in
-  `build/gcc-coverage/coverage-raw-summary.json`, and writes policy-adjusted
-  summaries and Cobertura to `build/gcc-coverage/coverage-summary.json` and
-  `build/gcc-coverage/coverage.xml`. Clang preserves its raw report in
-  `build/clang-coverage/coverage-summary.json` and checks its uncovered source
-  locations against the exact approved exclusion list. Both commands enforce
-  100 percent policy-adjusted line, function, and branch coverage while still
-  printing the raw metrics:
+- Run the supported compiler-specific coverage presets through:
 
   ```console
   ./scripts/run_coverage.sh gcc
   ./scripts/run_coverage.sh clang
   ```
+
+- GCC uses an isolated GCC-built deal.II stack under `.dependencies-gcc/`.
+  Raw GCC metrics are in `build/gcc-coverage/coverage-raw-summary.json`;
+  policy-adjusted metrics and Cobertura are in `coverage-summary.json` and
+  `coverage.xml` in that directory. Clang writes `coverage.json`,
+  `coverage.lcov`, and `coverage-summary.json` under `build/clang-coverage/`.
+  Both commands require nonempty first-party line/function coverage and check
+  line, function, and branch coverage. The version-only baseline has no
+  branches to exercise; a zero branch denominator is reported as not
+  applicable. There are no approved coverage exclusions for the baseline, so
+  raw and policy-adjusted metrics are identical.
 
 - Build the isolated GCC scientific dependencies once, with the system OpenMPI
   wrappers selected consistently across C, C++, Fortran, and the launcher:
@@ -140,8 +145,9 @@
   ```
 
 - Run `./format.sh` before submitting C++ changes.
-- Keep user-owned, ignored files under `docs/architecture/` intact. Change them
-  only when the user explicitly includes those planning documents in scope.
+- Keep user-owned, ignored files under `docs/architecture/` and `_planning/`
+  intact. Change them only when the user explicitly includes those planning
+  documents in scope.
 
 ## Git
 

@@ -115,19 +115,7 @@ if(ENABLE_CLANG_TIDY)
     set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")
 endif()
 
-add_library(rift STATIC
-    src/field_group_space.cpp
-    src/logging.cpp
-    src/mesh_snapshot.cpp
-    src/phase_graph.cpp
-    src/phase_support.cpp
-    src/rift.cpp
-    src/space_draft.cpp
-    src/space_snapshot.cpp
-    src/state_snapshot.cpp
-    src/state_store.cpp
-    src/state_transaction.cpp
-)
+add_library(rift STATIC src/rift.cpp)
 add_library(rift::rift ALIAS rift)
 
 target_include_directories(rift PUBLIC
@@ -148,9 +136,4 @@ option(BUILD_TESTING "Build tests" ON)
 if(BUILD_TESTING)
     enable_testing()
     add_subdirectory(tests)
-endif()
-
-option(BUILD_TUTORIALS "Build narrative Rift tutorial executables" ON)
-if(BUILD_TUTORIALS)
-    add_subdirectory(tutorials)
 endif()

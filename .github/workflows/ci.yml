@@ -162,9 +162,6 @@ jobs:
             --root . \
             --filter 'include/rift/' \
             --filter 'src/' \
-            --exclude-throw-branches \
-            --exclude-unreachable-branches \
-            --exclude-noncode-lines \
             --print-summary \
             --fail-under-line 100 \
             --fail-under-function 100 \
@@ -174,6 +171,17 @@ jobs:
             --cobertura-pretty \
             --output coverage.xml \
             build/coverage
+          python - <<'PY'
+          import json
+          import sys
+
+          with open("coverage-summary.json") as report:
+              summary = json.load(report)
+          if summary["line_total"] == 0 or summary["function_total"] == 0:
+              sys.exit("error: GCC coverage contains no first-party executable lines or functions")
+          if summary["branch_total"] == 0:
+              print("branches: not applicable (0 branches)")
+          PY
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

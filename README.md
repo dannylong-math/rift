@@ -1,13 +1,18 @@
 # Rift
 
-Rift is a C++23 research library for sharp-interface multiphase flow. It uses
-[deal.II 9.8.0](https://github.com/dealii/dealii/releases/tag/v9.8.0), MPI,
-p4est, simdutf, and spdlog.
+Rift is a C++23 research library for sharp-interface multiphase flow. The library
+is being redesigned; its current public API contains only semantic version
+information. The scientific dependency setup, build presets, tests, coverage,
+and documentation pipeline remain available for new development.
 
-This branch provides the first foundation slice: a process-wide context,
-canonical phase graphs, immutable mesh snapshots, closed phase supports,
-finite-element space schemas and snapshots, immutable transactional state, and
-rank-aware logging. It does not yet implement a flow model or time integrator.
+The previous foundation implementation is preserved at Git tag
+`reference/pre-reset-status`. It is historical reference, not a required
+architecture for the redesigned library. Inspect it without switching branches:
+
+```console
+git show reference/pre-reset-status:tutorials/01_foundations.cpp
+git ls-tree -r --name-only reference/pre-reset-status
+```
 
 ## Prerequisites
 
@@ -18,22 +23,21 @@ and Node.js 22.12 or newer are needed for documentation.
 
 ## Local dependencies
 
-Run:
+Check prerequisites before installing dependencies:
 
 ```console
+./scripts/install_dependencies.sh --check
 ./scripts/install_dependencies.sh
 ```
 
 The script installs version-pinned simdutf, spdlog, zlib, p4est, deal.II, and
 documentation dependencies under `.dependencies/`. Existing successful
 installations are reused. The deal.II build can take a substantial amount of
-time and disk space.
-Useful alternatives are:
+time and disk space. Useful alternatives are:
 
 ```console
-./scripts/install_dependencies.sh --check
 ./scripts/install_dependencies.sh --docs-only
-./scripts/install_dependencies.sh --science-only --jobs 12
+./scripts/install_dependencies.sh --science-only --jobs 6
 ./scripts/install_dependencies.sh --science-only --variant debug
 ./scripts/install_dependencies.sh --prefix /path/to/rift-dependencies
 ```
@@ -52,35 +56,11 @@ ctest --preset debug --output-on-failure
 The debug preset enables AddressSanitizer and UndefinedBehaviorSanitizer.
 `release`, `debug-tidy`, and `release-max` presets are also available.
 
-Each `tests/*.cpp` file is automatically built as one same-named CTest using
-Boost.UT. Each `tests/mpi/*.cpp` file is built once and registered as one-,
-two-, and three-rank CTests using the MPI launcher selected by CMake.
-
-## Rank-aware output
-
-`RiftContext` owns a synchronous logger. By default, informational and more
-severe records go to the terminal on world rank zero only. `LoggingOptions`
-can disable the terminal, select independent severity thresholds, and enable
-one deterministic file per rank from a common base path. Rank zero creates a
-missing parent directory before all ranks open their own files. The context
-also exposes `pcout()` for deal.II APIs that use stream-style conditional
-output; it is separate from logger levels and files.
-
-## Tutorials
-
-Tutorial executables are built by default. The first tutorial walks through
-the complete foundation lifecycle with extensive application-oriented
-comments:
-
-```console
-./build/debug/tutorials/rift_tutorial_01_foundations
-mpiexec -n 2 ./build/debug/tutorials/rift_tutorial_01_foundations
-```
-
-Set `-DBUILD_TUTORIALS=OFF` when configuring a library-only build.
-The Debug and Release test presets register this tutorial at one and two MPI
-ranks. Coverage presets disable tutorial compilation so only library and test
-translation units contribute instrumentation records.
+Each `tests/*_test.cpp` file is automatically built as one same-named CTest using
+Catch2 3.16.0. The retained MPI test infrastructure builds each `tests/mpi/*_test.cpp`
+file once and registers it as one-, two-, and three-rank CTests using the MPI
+launcher selected by CMake. There are currently no MPI-dependent library APIs
+or MPI tests.
 
 ## Continuous integration and coverage
 
@@ -88,6 +68,16 @@ Pull requests run the unit tests with GCC and Clang. A GCC coverage build uses
 gcovr to produce a Cobertura report and uploads it to Codecov. A nightly smoke
 workflow restores both compiler-specific deal.II caches and rebuilds them only
 if GitHub no longer has them.
+
+Run compiler-specific coverage checks locally with:
+
+```console
+./scripts/run_coverage.sh gcc
+./scripts/run_coverage.sh clang
+```
+
+Coverage requires 100 percent of first-party lines, functions, and branches;
+see [contribution guidance](AGENTS.md) for dependencies and report locations.
 
 ## Documentation
 

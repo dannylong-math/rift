@@ -2,26 +2,29 @@ include(FetchContent)
 
 find_package(MPI REQUIRED COMPONENTS CXX)
 
-FetchContent_Declare(ut
-    GIT_REPOSITORY https://github.com/boost-ext/ut.git
-    GIT_TAG v2.3.1
+FetchContent_Declare(Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG 317ac1ed4c0bb6e6b91eafc817e05c488feffcb3 # v3.16.0
 )
-FetchContent_MakeAvailable(ut)
+FetchContent_MakeAvailable(Catch2)
 
-file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
+# Apply Rift's clang-tidy policy to first-party code, not the fetched framework.
+set_target_properties(Catch2 Catch2WithMain PROPERTIES CXX_CLANG_TIDY "")
+
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*_test.cpp")
 
 foreach(test_source IN LISTS TEST_SOURCES)
     get_filename_component(test_name "${test_source}" NAME_WE)
 
     add_executable(${test_name} "${test_source}")
-    target_link_libraries(${test_name} rift::rift Boost::ut)
+    target_link_libraries(${test_name} rift::rift Catch2::Catch2WithMain)
     deal_ii_setup_target(${test_name})
 
     add_test(NAME ${test_name} COMMAND ${test_name})
     set_tests_properties(${test_name} PROPERTIES LABELS "unit")
 endforeach()
 
-file(GLOB MPI_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/mpi/*.cpp")
+file(GLOB MPI_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/mpi/*_test.cpp")
 
 function(add_rift_mpi_test test_target test_name mpi_process_count)
     add_test(
@@ -45,7 +48,9 @@ foreach(test_source IN LISTS MPI_TEST_SOURCES)
     get_filename_component(test_name "${test_source}" NAME_WE)
 
     add_executable(${test_name} "${test_source}")
-    target_link_libraries(${test_name} rift::rift Boost::ut)
+    # MPI tests provide a main that initializes MPI, runs Catch::Session,
+    # and finalizes MPI. Catch2WithMain cannot manage that lifetime.
+    target_link_libraries(${test_name} rift::rift Catch2::Catch2)
     deal_ii_setup_target(${test_name})
 
     foreach(mpi_process_count RANGE 1 3)
@@ -59,42 +64,3 @@ foreach(test_source IN LISTS MPI_TEST_SOURCES)
         add_rift_mpi_test("${test_name}" "${mpi_test_name}" "${mpi_process_count}")
     endforeach()
 endforeach()
-
-if(TARGET phase_graph_agreement_test)
-    add_rift_mpi_test(phase_graph_agreement_test phase_graph_agreement_test_no_interfaces_1_rank 1 no_interfaces)
-    add_rift_mpi_test(phase_graph_agreement_test phase_graph_agreement_test_accept_all_policy_1_rank 1
-        accept_all_policy)
-    add_rift_mpi_test(phase_graph_agreement_test phase_graph_agreement_test_no_phases_1_rank 1 no_phases)
-    add_rift_mpi_test(phase_graph_agreement_test phase_graph_agreement_test_field_errors_3_ranks 3 field_errors)
-    add_rift_mpi_test(phase_graph_agreement_test phase_graph_agreement_test_missing_compatibility_1_rank 1
-        missing_compatibility)
-    add_rift_mpi_test(phase_graph_agreement_test phase_graph_agreement_test_input_mismatch_2_ranks 2 input_mismatch)
-    add_rift_mpi_test(phase_graph_agreement_test phase_graph_agreement_test_compatibility_failures_2_ranks 2
-        compatibility_failures)
-    add_rift_mpi_test(phase_graph_agreement_test phase_graph_agreement_test_nonstandard_exception_1_rank 1
-        nonstandard_exception)
-    add_rift_mpi_test(phase_graph_agreement_test phase_graph_agreement_test_compatibility_mismatch_3_ranks 3
-        compatibility_mismatch)
-endif()
-
-if(TARGET phase_support_agreement_test)
-    add_rift_mpi_test(phase_support_agreement_test phase_support_agreement_test_no_phase_graph_1_rank 1)
-    set_tests_properties(phase_support_agreement_test_no_phase_graph_1_rank PROPERTIES
-        ENVIRONMENT "RIFT_PHASE_SUPPORT_TEST_MODE=no_phase_graph"
-    )
-endif()
-
-if(TARGET logging_agreement_test)
-    foreach(field terminal_enabled terminal_level file_enabled file_base_path file_level file_mode)
-        add_rift_mpi_test(logging_agreement_test "logging_agreement_test_${field}_mismatch_2_ranks" 2
-            "mismatch_${field}")
-    endforeach()
-    add_rift_mpi_test(logging_agreement_test logging_agreement_test_directory_failure_2_ranks 2 directory_failure)
-    add_rift_mpi_test(logging_agreement_test logging_agreement_test_invalid_options_1_rank 1 invalid_options)
-    add_rift_mpi_test(logging_agreement_test logging_agreement_test_sink_failure_1_rank 1 sink_failure)
-    add_rift_mpi_test(logging_agreement_test logging_agreement_test_flush_failure_1_rank 1 flush_failure)
-    add_rift_mpi_test(logging_agreement_test logging_agreement_test_off_levels_1_rank 1 off_levels)
-    add_rift_mpi_test(logging_agreement_test logging_agreement_test_empty_path_1_rank 1 empty_path)
-    add_rift_mpi_test(logging_agreement_test logging_agreement_test_relative_file_1_rank 1 relative_file)
-    add_rift_mpi_test(logging_agreement_test logging_agreement_test_append_file_1_rank 1 append_file)
-endif()

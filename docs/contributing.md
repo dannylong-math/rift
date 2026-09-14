@@ -11,13 +11,15 @@ together.
 
 ## Unit tests
 
-The test build intentionally has one rule: every `.cpp` file directly under
+The test build intentionally has one rule: every `*_test.cpp` file directly under
 `tests/` becomes one same-named executable and CTest. Adding a normal test does
 not require editing `tests/CMakeLists.txt`.
 
-Unit tests use Boost.UT. Keep each test source self-contained, define named
-`_test` cases directly in it, and use `expect()` assertions with meaningful
-comparisons. Do not use `assert`, because Release builds can compile it away.
+Unit tests use Catch2 3.16.0. Keep each test source self-contained, include
+`<catch2/catch_test_macros.hpp>`, define named `TEST_CASE` cases, and use `CHECK`
+or `REQUIRE` assertions with meaningful comparisons. Ordinary test executables
+link `Catch2::Catch2WithMain`, which supplies the test runner. Do not use
+`assert`, because Release builds can compile it away.
 Name files with a `_test.cpp` suffix and keep each executable focused on one
 public object or cohesive behavior. The earlier registration-header and
 subject-runner system is intentionally not part of this simpler layout.
@@ -34,8 +36,14 @@ Run one test with:
 ctest --preset debug -R '^version_test$' --output-on-failure
 ```
 
-There is currently no MPI test harness. Multi-rank testing will be designed
-when the first MPI-dependent feature needs it.
+The retained MPI infrastructure discovers each `tests/mpi/*_test.cpp` source and
+registers one-, two-, and three-rank CTests through CMake's selected launcher.
+There are currently no MPI tests. Future MPI tests link `Catch2::Catch2` and
+provide an MPI-aware `main` that runs `Catch::Session`.
+
+```console
+ctest --preset debug -L mpi --output-on-failure
+```
 
 ## Coverage
 
@@ -44,27 +52,18 @@ gcovr 8.6 checks line, function, and branch coverage for first-party code under
 `include/rift/` and `src/`, writes `coverage.xml` in Cobertura format, and the
 workflow uploads that file to Codecov.
 
-Run the same report locally with:
+Run compiler-specific coverage reports locally with:
 
 ```console
-cmake -S . -B build/coverage -G Ninja \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DBUILD_TESTING=ON \
-  -DENABLE_SANITIZERS=OFF \
-  -DENABLE_COVERAGE=ON
-cmake --build build/coverage --parallel 6
-ctest --test-dir build/coverage --output-on-failure
-gcovr --root . \
-  --filter 'include/rift/' \
-  --filter 'src/' \
-  --print-summary \
-  --fail-under-line 100 \
-  --fail-under-function 100 \
-  --fail-under-branch 100 \
-  --cobertura-pretty \
-  --output coverage.xml \
-  build/coverage
+./scripts/run_coverage.sh gcc
+./scripts/run_coverage.sh clang
 ```
+
+The scripts use the matching coverage presets and write reports under
+`build/gcc-coverage/` and `build/clang-coverage/`. GCC requires the isolated
+scientific dependency stack in `.dependencies-gcc/`; see the repository's
+`AGENTS.md` for the setup commands. The version-only baseline has no branches
+and no coverage exclusions.
 
 The three coverage thresholds are 100 percent for in-scope code. Coverage is a
 useful completeness check, but meaningful independent test oracles remain

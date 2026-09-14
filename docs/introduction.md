@@ -12,7 +12,9 @@ p4est.
 The implementation is being rebuilt from a clean foundation. Its current public
 surface contains only semantic version information. This deliberately small
 starting point allows each scientific component and its contracts to be
-reviewed before implementation.
+reviewed before implementation. The earlier foundation APIs and tutorials are
+preserved at Git tag `reference/pre-reset-status` for historical reference;
+they do not prescribe the new architecture.
 
 ## Build and test
 

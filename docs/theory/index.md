@@ -5,5 +5,6 @@ description: Mathematical formulation of Rift's sharp-interface multiphase model
 
 # Theory and formulation
 
-The mathematical formulation will be documented here as the implementation
-develops.
+The mathematical formulation will be documented here as the library is
+redesigned. The current implementation exposes only semantic version
+information; no physical model or solver is implemented.

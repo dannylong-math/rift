@@ -49,7 +49,6 @@ if [[ "${COVERAGE_KIND}" == "gcc" ]]; then
         --root "${REPOSITORY_ROOT}" \
         --filter 'include/rift/' \
         --filter 'src/' \
-        --gcov-exclude-directories '.*/tutorials' \
         --print-summary \
         --json-summary-pretty \
         --output "${BUILD_DIR}/coverage-raw-summary.json" \
@@ -60,10 +59,6 @@ if [[ "${COVERAGE_KIND}" == "gcc" ]]; then
         --root "${REPOSITORY_ROOT}" \
         --filter 'include/rift/' \
         --filter 'src/' \
-        --gcov-exclude-directories '.*/tutorials' \
-        --exclude-throw-branches \
-        --exclude-unreachable-branches \
-        --exclude-noncode-lines \
         --print-summary \
         --fail-under-line 100 \
         --fail-under-function 100 \
@@ -73,6 +68,17 @@ if [[ "${COVERAGE_KIND}" == "gcc" ]]; then
         --cobertura-pretty \
         --output "${BUILD_DIR}/coverage.xml" \
         "${BUILD_DIR}"
+    python3 - "${BUILD_DIR}/coverage-summary.json" <<'PY_COVERAGE'
+import json
+import sys
+
+with open(sys.argv[1]) as report:
+    summary = json.load(report)
+if summary["line_total"] == 0 or summary["function_total"] == 0:
+    sys.exit("error: GCC coverage contains no first-party executable lines or functions")
+if summary["branch_total"] == 0:
+    print("branches: not applicable (0 branches)")
+PY_COVERAGE
     exit 0
 fi
 
@@ -152,80 +158,25 @@ printf 'Raw Clang coverage:\n'
 jq '{type, version, data: [.data[] | {totals}]}' \
     "${COVERAGE_DATA}" > "${BUILD_DIR}/coverage-summary.json"
 
-# The same-order collective contracts make the defensive Task 04 and Task 08
-# blocks and the Task 06 MPI operational-failure path unreachable through
-# public inputs. Task 10 additionally excludes its impossible second-context
-# guard, resource-bound uint64_t/uint32_t overflows, and the wire conversion
-# reachable only from those overflow paths. The reviewer approved the Task 10
-# exclusions on 2026-09-04.
-# Exact locations prevent an unrelated future miss from passing.
-readonly APPROVED_UNCOVERED_LINES=$'src/mesh_snapshot.cpp:54\nsrc/mesh_snapshot.cpp:55\nsrc/phase_graph.cpp:905\nsrc/phase_graph.cpp:906\nsrc/phase_graph.cpp:907\nsrc/phase_graph.cpp:908\nsrc/phase_graph.cpp:909\nsrc/space_draft.cpp:844\nsrc/space_draft.cpp:845\nsrc/space_draft.cpp:846\nsrc/space_draft.cpp:847\nsrc/space_snapshot.cpp:261\nsrc/space_snapshot.cpp:262\nsrc/space_snapshot.cpp:264\nsrc/space_snapshot.cpp:336\nsrc/space_snapshot.cpp:337\nsrc/space_snapshot.cpp:338\nsrc/space_snapshot.cpp:339\nsrc/space_snapshot.cpp:340\nsrc/space_snapshot.cpp:342\nsrc/space_snapshot.cpp:425\nsrc/space_snapshot.cpp:426\nsrc/space_snapshot.cpp:427\nsrc/space_snapshot.cpp:428\nsrc/space_snapshot.cpp:430\nsrc/space_snapshot.cpp:616\nsrc/space_snapshot.cpp:617\nsrc/space_snapshot.cpp:618\nsrc/space_snapshot.cpp:619\nsrc/space_snapshot.cpp:620\nsrc/space_snapshot.cpp:622\nsrc/space_snapshot.cpp:638\nsrc/space_snapshot.cpp:639\nsrc/space_snapshot.cpp:640\nsrc/space_snapshot.cpp:641\nsrc/space_snapshot.cpp:642\nsrc/space_snapshot.cpp:644'
-readonly APPROVED_UNCOVERED_BRANCHES=$'src/mesh_snapshot.cpp:53\nsrc/phase_graph.cpp:903\nsrc/space_draft.cpp:842\nsrc/space_snapshot.cpp:259\nsrc/space_snapshot.cpp:334\nsrc/space_snapshot.cpp:423\nsrc/space_snapshot.cpp:614\nsrc/space_snapshot.cpp:620\nsrc/space_snapshot.cpp:636\nsrc/space_snapshot.cpp:641'
-
-actual_uncovered_lines="$(
-    awk \
-        -v include_root="${REPOSITORY_ROOT}/include/rift/" \
-        -v source_root="${REPOSITORY_ROOT}/src/" \
-        -v repository_root="${REPOSITORY_ROOT}/" \
-        '
-        /^SF:/ {
-            source = substr($0, 4)
-            in_scope = index(source, include_root) == 1 || index(source, source_root) == 1
-            relative_source = substr(source, length(repository_root) + 1)
-            next
-        }
-        in_scope && /^DA:/ {
-            split(substr($0, 4), fields, ",")
-            if (fields[2] == 0) {
-                print relative_source ":" fields[1]
-            }
-        }
-        ' \
-        "${COVERAGE_LCOV}" | sort -u
-)"
-
-actual_uncovered_branches="$(
-    jq -r \
-        --arg include_root "${REPOSITORY_ROOT}/include/rift/" \
-        --arg source_root "${REPOSITORY_ROOT}/src/" \
-        --arg repository_root "${REPOSITORY_ROOT}/" \
-        '
-        .data[].files[]
-        | select((.filename | startswith($include_root)) or (.filename | startswith($source_root)))
-        | .filename as $filename
-        | .branches[]
-        | select(.[4] == 0)
-        | "\($filename | ltrimstr($repository_root)):\(.[0])"
-        ' \
-        "${COVERAGE_DATA}" | sort -u
-)"
-
-if ! jq -e \
-    '.data[0].totals | (.lines.count - .lines.covered) == 37 and .functions.percent == 100 and .branches.notcovered == 12' \
-    "${BUILD_DIR}/coverage-summary.json" >/dev/null || \
-    [[ "${actual_uncovered_lines}" != "${APPROVED_UNCOVERED_LINES}" ]] || \
-    [[ "${actual_uncovered_branches}" != "${APPROVED_UNCOVERED_BRANCHES}" ]]; then
-    coverage_totals="$(jq -r \
-        '.data[0].totals | "lines=\(.lines.percent)%, functions=\(.functions.percent)%, branches=\(.branches.percent)%"' \
-        "${BUILD_DIR}/coverage-summary.json")"
-    printf 'Unexpected uncovered Clang lines:\n%s\n' "${actual_uncovered_lines:-<none>}" >&2
-    printf 'Unexpected uncovered Clang branches:\n%s\n' "${actual_uncovered_branches:-<none>}" >&2
-    die "Clang coverage differs from the approved exclusions: ${coverage_totals}"
+# There are no approved coverage exclusions in the reset library. Compare
+# counts instead of percentages: a branch-free library has no missed branches,
+# but reporting 100 percent branch coverage would hide the empty denominator.
+if ! jq -e '
+    (.data | length) > 0 and
+    all(.data[].totals;
+        .lines.count > 0 and .functions.count > 0 and
+        .lines.covered == .lines.count and
+        .functions.covered == .functions.count and
+        .branches.covered == .branches.count)
+    ' "${BUILD_DIR}/coverage-summary.json" >/dev/null; then
+    die "Clang coverage must contain first-party lines/functions and no uncovered lines, functions, or branches"
 fi
 
-printf 'Policy-adjusted Clang coverage:\n'
-read -r adjusted_lines adjusted_functions adjusted_branches < <(
-    jq -r '
-        .data[0].totals
-        | [
-            .lines.covered,
-            .functions.count,
-            (.branches.count - .branches.notcovered)
-          ]
-        | @tsv
-        ' \
-        "${BUILD_DIR}/coverage-summary.json"
-)
-printf 'lines: 100.0%% (%s out of %s)\n' "${adjusted_lines}" "${adjusted_lines}"
-printf 'functions: 100.0%% (%s out of %s)\n' "${adjusted_functions}" "${adjusted_functions}"
-printf 'branches: 100.0%% (%s out of %s)\n' "${adjusted_branches}" "${adjusted_branches}"
+printf 'Policy-adjusted Clang coverage (no exclusions):\n'
+jq -r '
+    .data[].totals
+    | "lines: 100.0% (\(.lines.covered) out of \(.lines.count))",
+      "functions: 100.0% (\(.functions.covered) out of \(.functions.count))",
+      (if .branches.count == 0 then "branches: not applicable (0 branches)"
+       else "branches: 100.0% (\(.branches.covered) out of \(.branches.count))" end)
+    ' "${BUILD_DIR}/coverage-summary.json"
