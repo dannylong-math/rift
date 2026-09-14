@@ -83,3 +83,18 @@ if(TARGET phase_support_agreement_test)
         ENVIRONMENT "RIFT_PHASE_SUPPORT_TEST_MODE=no_phase_graph"
     )
 endif()
+
+if(TARGET logging_agreement_test)
+    foreach(field terminal_enabled terminal_level file_enabled file_base_path file_level file_mode)
+        add_rift_mpi_test(logging_agreement_test "logging_agreement_test_${field}_mismatch_2_ranks" 2
+            "mismatch_${field}")
+    endforeach()
+    add_rift_mpi_test(logging_agreement_test logging_agreement_test_directory_failure_2_ranks 2 directory_failure)
+    add_rift_mpi_test(logging_agreement_test logging_agreement_test_invalid_options_1_rank 1 invalid_options)
+    add_rift_mpi_test(logging_agreement_test logging_agreement_test_sink_failure_1_rank 1 sink_failure)
+    add_rift_mpi_test(logging_agreement_test logging_agreement_test_flush_failure_1_rank 1 flush_failure)
+    add_rift_mpi_test(logging_agreement_test logging_agreement_test_off_levels_1_rank 1 off_levels)
+    add_rift_mpi_test(logging_agreement_test logging_agreement_test_empty_path_1_rank 1 empty_path)
+    add_rift_mpi_test(logging_agreement_test logging_agreement_test_relative_file_1_rank 1 relative_file)
+    add_rift_mpi_test(logging_agreement_test logging_agreement_test_append_file_1_rank 1 append_file)
+endif()

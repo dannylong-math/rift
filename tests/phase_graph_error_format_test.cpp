@@ -23,7 +23,7 @@ int main()
 {
     using namespace boost::ut;
 
-    const suite<"Phase graph error formatting"> suite = [] {
+    [[maybe_unused]] const suite<"Phase graph error formatting"> suite = [] {
         "an empty error range produces no text"_test = [] { expect(rift::format_phase_graph_errors({}).empty()); };
 
         "an unscoped error remains one standalone diagnostic"_test = [] {

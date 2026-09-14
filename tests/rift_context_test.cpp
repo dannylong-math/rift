@@ -13,7 +13,7 @@ int main(int argc, char** argv)
     static rift::RiftContext* context_ptr = nullptr;
     context_ptr = &actual_context;
 
-    const suite<"RiftContext"> suite = [] {
+    [[maybe_unused]] const suite<"RiftContext"> suite = [] {
         auto& context = *context_ptr;
         "RiftContext borrows the world communicator"_test = [&context] {
             expect(context.mpi_communicator() == MPI_COMM_WORLD);

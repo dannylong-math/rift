@@ -442,7 +442,7 @@ int main(int argc, char** argv)
     context_ptr = &actual_context;
     scenario = selected_scenario;
 
-    const suite<"Phase graph agreement"> suite = [] {
+    [[maybe_unused]] const suite<"Phase graph agreement"> suite = [] {
         auto& context = *context_ptr;
         "the selected collective phase-graph scenario"_test = [&context] { run_scenario(context, scenario); };
     };

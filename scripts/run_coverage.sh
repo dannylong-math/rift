@@ -49,6 +49,7 @@ if [[ "${COVERAGE_KIND}" == "gcc" ]]; then
         --root "${REPOSITORY_ROOT}" \
         --filter 'include/rift/' \
         --filter 'src/' \
+        --gcov-exclude-directories '.*/tutorials' \
         --print-summary \
         --json-summary-pretty \
         --output "${BUILD_DIR}/coverage-raw-summary.json" \
@@ -59,6 +60,7 @@ if [[ "${COVERAGE_KIND}" == "gcc" ]]; then
         --root "${REPOSITORY_ROOT}" \
         --filter 'include/rift/' \
         --filter 'src/' \
+        --gcov-exclude-directories '.*/tutorials' \
         --exclude-throw-branches \
         --exclude-unreachable-branches \
         --exclude-noncode-lines \
@@ -157,8 +159,8 @@ jq '{type, version, data: [.data[] | {totals}]}' \
 # reachable only from those overflow paths. The reviewer approved the Task 10
 # exclusions on 2026-09-04.
 # Exact locations prevent an unrelated future miss from passing.
-readonly APPROVED_UNCOVERED_LINES=$'src/mesh_snapshot.cpp:54\nsrc/mesh_snapshot.cpp:55\nsrc/phase_graph.cpp:905\nsrc/phase_graph.cpp:906\nsrc/phase_graph.cpp:907\nsrc/phase_graph.cpp:908\nsrc/phase_graph.cpp:909\nsrc/space_draft.cpp:844\nsrc/space_draft.cpp:845\nsrc/space_draft.cpp:846\nsrc/space_draft.cpp:847\nsrc/space_snapshot.cpp:260\nsrc/space_snapshot.cpp:261\nsrc/space_snapshot.cpp:263\nsrc/space_snapshot.cpp:335\nsrc/space_snapshot.cpp:336\nsrc/space_snapshot.cpp:337\nsrc/space_snapshot.cpp:338\nsrc/space_snapshot.cpp:339\nsrc/space_snapshot.cpp:341\nsrc/space_snapshot.cpp:424\nsrc/space_snapshot.cpp:425\nsrc/space_snapshot.cpp:426\nsrc/space_snapshot.cpp:427\nsrc/space_snapshot.cpp:429\nsrc/space_snapshot.cpp:615\nsrc/space_snapshot.cpp:616\nsrc/space_snapshot.cpp:617\nsrc/space_snapshot.cpp:618\nsrc/space_snapshot.cpp:619\nsrc/space_snapshot.cpp:621\nsrc/space_snapshot.cpp:637\nsrc/space_snapshot.cpp:638\nsrc/space_snapshot.cpp:639\nsrc/space_snapshot.cpp:640\nsrc/space_snapshot.cpp:641\nsrc/space_snapshot.cpp:643'
-readonly APPROVED_UNCOVERED_BRANCHES=$'src/mesh_snapshot.cpp:53\nsrc/phase_graph.cpp:903\nsrc/space_draft.cpp:842\nsrc/space_snapshot.cpp:258\nsrc/space_snapshot.cpp:333\nsrc/space_snapshot.cpp:422\nsrc/space_snapshot.cpp:613\nsrc/space_snapshot.cpp:619\nsrc/space_snapshot.cpp:635\nsrc/space_snapshot.cpp:640'
+readonly APPROVED_UNCOVERED_LINES=$'src/mesh_snapshot.cpp:54\nsrc/mesh_snapshot.cpp:55\nsrc/phase_graph.cpp:905\nsrc/phase_graph.cpp:906\nsrc/phase_graph.cpp:907\nsrc/phase_graph.cpp:908\nsrc/phase_graph.cpp:909\nsrc/space_draft.cpp:844\nsrc/space_draft.cpp:845\nsrc/space_draft.cpp:846\nsrc/space_draft.cpp:847\nsrc/space_snapshot.cpp:261\nsrc/space_snapshot.cpp:262\nsrc/space_snapshot.cpp:264\nsrc/space_snapshot.cpp:336\nsrc/space_snapshot.cpp:337\nsrc/space_snapshot.cpp:338\nsrc/space_snapshot.cpp:339\nsrc/space_snapshot.cpp:340\nsrc/space_snapshot.cpp:342\nsrc/space_snapshot.cpp:425\nsrc/space_snapshot.cpp:426\nsrc/space_snapshot.cpp:427\nsrc/space_snapshot.cpp:428\nsrc/space_snapshot.cpp:430\nsrc/space_snapshot.cpp:616\nsrc/space_snapshot.cpp:617\nsrc/space_snapshot.cpp:618\nsrc/space_snapshot.cpp:619\nsrc/space_snapshot.cpp:620\nsrc/space_snapshot.cpp:622\nsrc/space_snapshot.cpp:638\nsrc/space_snapshot.cpp:639\nsrc/space_snapshot.cpp:640\nsrc/space_snapshot.cpp:641\nsrc/space_snapshot.cpp:642\nsrc/space_snapshot.cpp:644'
+readonly APPROVED_UNCOVERED_BRANCHES=$'src/mesh_snapshot.cpp:53\nsrc/phase_graph.cpp:903\nsrc/space_draft.cpp:842\nsrc/space_snapshot.cpp:259\nsrc/space_snapshot.cpp:334\nsrc/space_snapshot.cpp:423\nsrc/space_snapshot.cpp:614\nsrc/space_snapshot.cpp:620\nsrc/space_snapshot.cpp:636\nsrc/space_snapshot.cpp:641'
 
 actual_uncovered_lines="$(
     awk \

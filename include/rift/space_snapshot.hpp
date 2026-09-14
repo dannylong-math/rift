@@ -39,6 +39,38 @@ class SpaceSnapshotMakeSharedEnabler;
 /** \brief Identify one canonical nonspatial regional state entry. */
 using RegionalEntryId = StrongId<detail::RegionalEntryIdTag>;
 
+/** \brief Bind a support-field ID to the finalized space that defines it. */
+struct PhaseSupportFieldReference {
+    /** \brief Finalized-space epoch that interprets `field_group`. */
+    SpaceEpoch space_epoch;
+    /** \brief Category-local support-field identity. */
+    PhaseSupportFieldGroupId field_group;
+};
+
+/** \brief Bind a geometry-field ID to the finalized space that defines it. */
+struct GeometryFieldReference {
+    /** \brief Finalized-space epoch that interprets `field_group`. */
+    SpaceEpoch space_epoch;
+    /** \brief Category-local geometry-field identity. */
+    GeometryFieldGroupId field_group;
+};
+
+/** \brief Bind a discrete-metadata ID to the finalized space that defines it. */
+struct DiscreteGeometryMetadataReference {
+    /** \brief Finalized-space epoch that interprets `metadata`. */
+    SpaceEpoch space_epoch;
+    /** \brief Category-local metadata identity. */
+    DiscreteGeometryMetadataId metadata;
+};
+
+/** \brief Bind a regional-entry ID to the finalized space that defines it. */
+struct RegionalEntryReference {
+    /** \brief Finalized-space epoch that interprets `regional_entry`. */
+    SpaceEpoch space_epoch;
+    /** \brief Category-local regional-entry identity. */
+    RegionalEntryId regional_entry;
+};
+
 /** \brief Request one scalar associated with a phase-region constraint. */
 struct RegionalEntrySpecification {
     /** \brief Canonical phase associated with this scalar. */
@@ -300,13 +332,27 @@ public:
     [[nodiscard]] std::optional<RegionalEntryId> find_regional_entry(PhaseId phase,
                                                                      std::string_view name) const noexcept;
 
+    /** \brief Create a checked reference to one support-restricted field. */
+    [[nodiscard]] PhaseSupportFieldReference phase_support_field_reference(PhaseSupportFieldGroupId id) const;
+    /** \brief Create a checked reference to one background geometry field. */
+    [[nodiscard]] GeometryFieldReference geometry_field_reference(GeometryFieldGroupId id) const;
+    /** \brief Create a checked reference to one discrete geometry-metadata block. */
+    [[nodiscard]] DiscreteGeometryMetadataReference
+    discrete_geometry_metadata_reference(DiscreteGeometryMetadataId id) const;
+    /** \brief Create a checked reference to one nonspatial regional entry. */
+    [[nodiscard]] RegionalEntryReference regional_entry_reference(RegionalEntryId id) const;
+
 private:
     friend class RiftContext;
     friend class detail::SpaceSnapshotMakeSharedEnabler<dim>;
 
     /** \brief Adopt every resource transferred by successful finalization. */
-    SpaceSnapshot(SpaceEpoch epoch, PhaseSupportSet<dim> phase_supports, SpaceSchema schema, StateLayout layout,
+    SpaceSnapshot(const RiftContext* creator_context, SpaceEpoch epoch, PhaseSupportSet<dim> phase_supports,
+                  SpaceSchema schema, StateLayout layout,
                   std::unique_ptr<detail::FieldSpaceStorage<dim>> field_spaces) noexcept;
+
+    /** \brief Non-owning identity of the context that finalized this space. */
+    const RiftContext* creator_context_;
 
     /** \brief Published context-local space epoch. */
     SpaceEpoch epoch_;

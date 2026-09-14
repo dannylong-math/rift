@@ -55,7 +55,7 @@ int main(int argc, char** argv)
     static rift::RiftContext* context_ptr = nullptr;
     context_ptr = &actual_context;
 
-    const suite<"MeshSnapshot"> suite = [] {
+    [[maybe_unused]] const suite<"MeshSnapshot"> suite = [] {
         auto& context = *context_ptr;
 
         "MeshSnapshot adopts a populated triangulation and mapping"_test = [&context] {

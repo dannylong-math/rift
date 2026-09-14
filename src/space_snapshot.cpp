@@ -47,9 +47,10 @@ template<int dim>
 class SpaceSnapshotMakeSharedEnabler final : public SpaceSnapshot<dim> {
 public:
     /** \brief Forward an already-agreed ownership transfer into the snapshot. */
-    SpaceSnapshotMakeSharedEnabler(SpaceEpoch epoch, PhaseSupportSet<dim> phase_supports, SpaceSchema schema,
-                                   StateLayout layout, std::unique_ptr<FieldSpaceStorage<dim>> field_spaces) noexcept :
-        SpaceSnapshot<dim>(epoch, std::move(phase_supports), std::move(schema), std::move(layout),
+    SpaceSnapshotMakeSharedEnabler(const RiftContext* creator_context, SpaceEpoch epoch,
+                                   PhaseSupportSet<dim> phase_supports, SpaceSchema schema, StateLayout layout,
+                                   std::unique_ptr<FieldSpaceStorage<dim>> field_spaces) noexcept :
+        SpaceSnapshot<dim>(creator_context, epoch, std::move(phase_supports), std::move(schema), std::move(layout),
                            std::move(field_spaces))
     {
     }
@@ -735,9 +736,10 @@ const RegionalEntry& StateLayout::regional_entry(const RegionalEntryId id) const
 
 template<int dim>
     requires(dim == 2 || dim == 3)
-SpaceSnapshot<dim>::SpaceSnapshot(const SpaceEpoch epoch, PhaseSupportSet<dim> phase_supports, SpaceSchema schema,
-                                  StateLayout layout,
+SpaceSnapshot<dim>::SpaceSnapshot(const RiftContext* creator_context, const SpaceEpoch epoch,
+                                  PhaseSupportSet<dim> phase_supports, SpaceSchema schema, StateLayout layout,
                                   std::unique_ptr<detail::FieldSpaceStorage<dim>> field_spaces) noexcept :
+    creator_context_(creator_context),
     epoch_(epoch),
     phase_supports_(std::move(phase_supports)),
     schema_(std::move(schema)),
@@ -861,6 +863,39 @@ std::optional<RegionalEntryId> SpaceSnapshot<dim>::find_regional_entry(const Pha
 
 template<int dim>
     requires(dim == 2 || dim == 3)
+PhaseSupportFieldReference SpaceSnapshot<dim>::phase_support_field_reference(const PhaseSupportFieldGroupId id) const
+{
+    static_cast<void>(phase_support_field_space(id));
+    return {.space_epoch = epoch_, .field_group = id};
+}
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
+GeometryFieldReference SpaceSnapshot<dim>::geometry_field_reference(const GeometryFieldGroupId id) const
+{
+    static_cast<void>(geometry_field_space(id));
+    return {.space_epoch = epoch_, .field_group = id};
+}
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
+DiscreteGeometryMetadataReference
+SpaceSnapshot<dim>::discrete_geometry_metadata_reference(const DiscreteGeometryMetadataId id) const
+{
+    static_cast<void>(layout_.discrete_geometry_metadata(id));
+    return {.space_epoch = epoch_, .metadata = id};
+}
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
+RegionalEntryReference SpaceSnapshot<dim>::regional_entry_reference(const RegionalEntryId id) const
+{
+    static_cast<void>(layout_.regional_entry(id));
+    return {.space_epoch = epoch_, .regional_entry = id};
+}
+
+template<int dim>
+    requires(dim == 2 || dim == 3)
 SpaceSnapshotResult<dim> RiftContext::finalize_space(SpaceDraft<dim>& draft,
                                                      std::vector<RegionalEntrySpecification> regional_entries)
 {
@@ -899,7 +934,7 @@ SpaceSnapshotResult<dim> RiftContext::finalize_space(SpaceDraft<dim>& draft,
                                  std::move(layout.discrete_geometry_metadata), std::move(layout.regional_entries),
                                  layout.total_cardinality);
     auto mutable_snapshot = std::make_shared<detail::SpaceSnapshotMakeSharedEnabler<dim>>(
-        draft.epoch_, std::move(draft.phase_supports_), std::move(draft.schema_), std::move(published_layout),
+        this, draft.epoch_, std::move(draft.phase_supports_), std::move(draft.schema_), std::move(published_layout),
         std::move(draft.field_spaces_));
     std::shared_ptr<const SpaceSnapshot<dim>> snapshot = std::move(mutable_snapshot);
     draft.creator_context_ = nullptr;

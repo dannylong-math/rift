@@ -80,12 +80,12 @@ void test_descriptor_views()
         std::string_view name;
         std::string_view physics;
     };
-    constexpr std::array expected_phases{
+    constexpr std::array<ExpectedPhase, 4> expected_phases{{
         ExpectedPhase{.id = 0, .name = "air", .physics = "ideal-gas"},
         ExpectedPhase{.id = 1, .name = "oil", .physics = "viscous"},
         ExpectedPhase{.id = 2, .name = "solid", .physics = "elastic"},
         ExpectedPhase{.id = 3, .name = "water", .physics = "incompressible"},
-    };
+    }};
 
     const auto phases = graph_ptr->phases();
     expect(phases.size() == expected_phases.size());
@@ -109,12 +109,12 @@ void test_descriptor_views()
         std::uint32_t plus_phase;
         std::string_view operation;
     };
-    constexpr std::array expected_interfaces{
+    constexpr std::array<ExpectedInterface, 3> expected_interfaces{{
         ExpectedInterface{.id = 0, .name = "air-solid", .minus_phase = 2, .plus_phase = 0, .operation = "contact"},
         ExpectedInterface{
             .id = 1, .name = "free-surface", .minus_phase = 3, .plus_phase = 0, .operation = "surface-tension"},
         ExpectedInterface{.id = 2, .name = "water-solid", .minus_phase = 3, .plus_phase = 2, .operation = "wetting"},
-    };
+    }};
 
     const auto interfaces = graph_ptr->interfaces();
     expect(interfaces.size() == expected_interfaces.size());
@@ -241,7 +241,7 @@ int main(int argc, char** argv)
         creation_failure = rift::format_phase_graph_errors(result.error());
     }
 
-    const suite<"Published phase graph"> suite = [] {
+    [[maybe_unused]] const suite<"Published phase graph"> suite = [] {
         "descriptor views match an independent canonical table"_test = test_descriptor_views;
         "numeric and name lookup are checked"_test = test_checked_lookup;
         "phase-pair lookup is unordered and checked"_test = test_unordered_adjacency_lookup;

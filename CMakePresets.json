@@ -15,6 +15,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "BUILD_TESTING": "ON",
+        "BUILD_TUTORIALS": "OFF",
         "ENABLE_SANITIZERS": "OFF",
         "ENABLE_COVERAGE": "ON"
       }

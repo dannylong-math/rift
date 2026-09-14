@@ -2,11 +2,12 @@
 
 Rift is a C++23 research library for sharp-interface multiphase flow. It uses
 [deal.II 9.8.0](https://github.com/dealii/dealii/releases/tag/v9.8.0), MPI,
-p4est, and simdutf.
+p4est, simdutf, and spdlog.
 
-This branch is a clean-slate re-foundation. The library currently provides only
-its semantic version API; scientific components will be reintroduced through
-reviewed, collaborative feature work.
+This branch provides the first foundation slice: a process-wide context,
+canonical phase graphs, immutable mesh snapshots, closed phase supports,
+finite-element space schemas and snapshots, immutable transactional state, and
+rank-aware logging. It does not yet implement a flow model or time integrator.
 
 ## Prerequisites
 
@@ -23,9 +24,10 @@ Run:
 ./scripts/install_dependencies.sh
 ```
 
-The script installs version-pinned simdutf, zlib, p4est, deal.II, and documentation
-dependencies under `.dependencies/`. Existing successful installations are
-reused. The deal.II build can take a substantial amount of time and disk space.
+The script installs version-pinned simdutf, spdlog, zlib, p4est, deal.II, and
+documentation dependencies under `.dependencies/`. Existing successful
+installations are reused. The deal.II build can take a substantial amount of
+time and disk space.
 Useful alternatives are:
 
 ```console
@@ -53,6 +55,32 @@ The debug preset enables AddressSanitizer and UndefinedBehaviorSanitizer.
 Each `tests/*.cpp` file is automatically built as one same-named CTest using
 Boost.UT. Each `tests/mpi/*.cpp` file is built once and registered as one-,
 two-, and three-rank CTests using the MPI launcher selected by CMake.
+
+## Rank-aware output
+
+`RiftContext` owns a synchronous logger. By default, informational and more
+severe records go to the terminal on world rank zero only. `LoggingOptions`
+can disable the terminal, select independent severity thresholds, and enable
+one deterministic file per rank from a common base path. Rank zero creates a
+missing parent directory before all ranks open their own files. The context
+also exposes `pcout()` for deal.II APIs that use stream-style conditional
+output; it is separate from logger levels and files.
+
+## Tutorials
+
+Tutorial executables are built by default. The first tutorial walks through
+the complete foundation lifecycle with extensive application-oriented
+comments:
+
+```console
+./build/debug/tutorials/rift_tutorial_01_foundations
+mpiexec -n 2 ./build/debug/tutorials/rift_tutorial_01_foundations
+```
+
+Set `-DBUILD_TUTORIALS=OFF` when configuring a library-only build.
+The Debug and Release test presets register this tutorial at one and two MPI
+ranks. Coverage presets disable tutorial compilation so only library and test
+translation units contribute instrumentation records.
 
 ## Continuous integration and coverage
 

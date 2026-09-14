@@ -26,7 +26,7 @@ namespace rift {
 enum class DofNumbering : std::uint8_t {
     /** \brief Preserve deal.II's native numbering. */
     native,
-    /** \brief Group DoFs by finite-element component. */
+    /** \brief Group DoFs by component within each contiguous MPI-rank block. */
     component_wise,
 };
 

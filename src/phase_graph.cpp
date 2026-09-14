@@ -152,7 +152,7 @@ void add_error(PhaseGraphErrors& errors, const PhaseGraphErrorCode code, std::st
 }
 
 /** \brief Stable names used when formatting machine-readable error codes. */
-constexpr std::array phase_graph_error_code_names{
+constexpr std::array<std::string_view, 17> phase_graph_error_code_names{{
     std::string_view{"no_phases"},
     std::string_view{"empty_phase_name"},
     std::string_view{"empty_physics_key"},
@@ -170,7 +170,7 @@ constexpr std::array phase_graph_error_code_names{
     std::string_view{"phase_graph_creation_already_attempted"},
     std::string_view{"collective_input_mismatch"},
     std::string_view{"collective_compatibility_mismatch"},
-};
+}};
 
 static_assert(phase_graph_error_code_names.size() ==
               static_cast<std::size_t>(PhaseGraphErrorCode::collective_compatibility_mismatch) + 1);

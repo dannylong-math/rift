@@ -5,7 +5,7 @@ int main()
 {
     using namespace boost::ut;
 
-    const suite<"Version Control"> suite = [] {
+    [[maybe_unused]] const suite<"Version Control"> suite = [] {
         "Rift reports its configured semantic version"_test = [] {
             const auto version = rift::current_version();
 

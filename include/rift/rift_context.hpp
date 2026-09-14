@@ -6,14 +6,17 @@
  */
 
 #include <cstdint>
+#include <deal.II/base/conditional_ostream.h>
 #include <deal.II/base/mpi.h>
 #include <memory>
 #include <rift/field_group_space.hpp>
+#include <rift/logging.hpp>
 #include <rift/mesh_snapshot.hpp>
 #include <rift/phase_graph.hpp>
 #include <rift/phase_support.hpp>
 #include <rift/space_draft.hpp>
 #include <rift/space_snapshot.hpp>
+#include <rift/state_store.hpp>
 #include <vector>
 
 namespace rift {
@@ -49,13 +52,15 @@ public:
      * initialization may update them.
      * \param[in] max_threads maximum thread count forwarded unchanged to
      * deal.II.
+     * \param[in] logging rank-aware terminal and optional file configuration;
+     * every rank must supply an equivalent value.
      */
-    RiftContext(int& argc, char**& argv, const unsigned int max_threads = 1) : mpi_lifetime_(argc, argv, max_threads) {}
+    RiftContext(int& argc, char**& argv, unsigned int max_threads = 1, LoggingOptions logging = {});
 
     /**
      * \brief Destructor. Finalizes the process-wide runtime.
      */
-    ~RiftContext() = default;
+    ~RiftContext();
 
     /**
      * \brief Copy construction is disabled because the runtime has one owner.
@@ -106,6 +111,20 @@ public:
     {
         return dealii::Utilities::MPI::n_mpi_processes(mpi_communicator());
     }
+
+    /** \brief Access the explicit rank-aware Rift logger. */
+    [[nodiscard]] Logger& logger() noexcept;
+
+    /** \brief Access the explicit rank-aware Rift logger through a const context. */
+    [[nodiscard]] const Logger& logger() const noexcept;
+
+    /**
+     * \brief Access deal.II's rank-zero conditional terminal stream.
+     *
+     * The stream is active only when terminal logging is enabled and this is
+     * world rank zero. It never writes to configured logger files.
+     */
+    [[nodiscard]] const dealii::ConditionalOStream& pcout() const noexcept;
 
     /**
      * \brief Collectively create and own this context's canonical phase graph.
@@ -216,11 +235,29 @@ public:
     [[nodiscard]] SpaceSnapshotResult<dim>
     finalize_space(SpaceDraft<dim>& draft, std::vector<RegionalEntrySpecification> regional_entries = {});
 
+    /**
+     * \brief Collectively allocate an immutable accepted-state root and store.
+     *
+     * Every world rank must supply the same finalized space and retention
+     * policy. The returned uniquely owned store shares immutable snapshots
+     * with callers but is not retained by this process-wide context.
+     */
+    template<int dim>
+        requires(dim == 2 || dim == 3)
+    [[nodiscard]] StateStoreResult<dim> create_state_store(std::shared_ptr<const SpaceSnapshot<dim>> space,
+                                                           RetentionPolicy policy = {});
+
 private:
     /**
      * \brief RAII owner of deal.II, p4est, and MPI initialization state.
      */
     dealii::Utilities::MPI::MPI_InitFinalize mpi_lifetime_;
+
+    /** \brief Logger destroyed and flushed before MPI lifetime finalization. */
+    std::unique_ptr<Logger> logger_;
+
+    /** \brief deal.II stream bridge destroyed before the logger and MPI. */
+    std::unique_ptr<dealii::ConditionalOStream> pcout_;
 
     /** \brief Whether the context's single graph-creation attempt was consumed. */
     bool phase_graph_creation_attempted_ = false;
@@ -236,6 +273,9 @@ private:
 
     /** \brief Next context-local epoch reserved by successful draft construction. */
     std::uint64_t next_space_epoch_index_ = 0;
+
+    /** \brief Next context-local identity reserved by successful state-store construction. */
+    std::uint64_t next_state_store_index_ = 0;
 };
 
 } // namespace rift

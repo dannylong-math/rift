@@ -5,10 +5,12 @@
 
 #include <algorithm>
 #include <deal.II/base/index_set.h>
+#include <deal.II/base/types.h>
 #include <deal.II/dofs/dof_accessor.h>
 #include <deal.II/dofs/dof_handler.h>
 #include <deal.II/dofs/dof_renumbering.h>
 #include <deal.II/dofs/dof_tools.h>
+#include <deal.II/fe/component_mask.h>
 #include <deal.II/fe/fe_nothing.h>
 #include <deal.II/fe/fe_q.h>
 #include <deal.II/fe/fe_system.h>
@@ -25,6 +27,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace rift {
 
@@ -74,11 +77,40 @@ void select_phase_support_finite_elements(dealii::DoFHandler<dim>& dof_handler, 
     }
 }
 
+/** \brief Restore contiguous MPI ownership while retaining local component blocks. */
+template<int dim>
+void restore_contiguous_rank_ownership(dealii::DoFHandler<dim>& dof_handler, const dealii::IndexSet& native_owned_dofs)
+{
+    const auto component_owned_dofs = dof_handler.locally_owned_dofs();
+    if (component_owned_dofs.is_contiguous()) {
+        return;
+    }
+
+    std::vector<dealii::types::global_dof_index> new_numbers(component_owned_dofs.n_elements());
+    auto next_new_number = native_owned_dofs.begin();
+    const auto n_components = dof_handler.get_fe().n_components();
+    for (unsigned int component = 0; component < n_components; ++component) {
+        dealii::ComponentMask mask(n_components, false);
+        mask.set(component, true);
+        const auto owned_component = dealii::DoFTools::extract_dofs(dof_handler, mask) & component_owned_dofs;
+        for (const auto old_number : owned_component) {
+            new_numbers.at(component_owned_dofs.index_within_set(old_number)) = *next_new_number;
+            ++next_new_number;
+        }
+    }
+    dof_handler.renumber_dofs(new_numbers);
+}
+
 /** \brief Apply the selected numbering before dependent objects are created. */
 template<int dim> void apply_numbering(dealii::DoFHandler<dim>& dof_handler, const DofNumbering numbering)
 {
     if (numbering == DofNumbering::component_wise) {
+        const auto native_owned_dofs = dof_handler.locally_owned_dofs();
         dealii::DoFRenumbering::component_wise(dof_handler);
+        // Global component blocks make a rank's ownership non-contiguous.
+        // Regroup them by rank so deal.II's native distributed vectors remain
+        // usable, while preserving component blocks within each rank.
+        restore_contiguous_rank_ownership(dof_handler, native_owned_dofs);
     }
 }
 

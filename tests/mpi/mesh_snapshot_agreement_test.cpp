@@ -147,7 +147,7 @@ int main(int argc, char** argv)
     static rift::RiftContext* context_ptr = nullptr;
     context_ptr = &actual_context;
 
-    const suite<"MeshSnapshotAgreement"> suite = [] {
+    [[maybe_unused]] const suite<"MeshSnapshotAgreement"> suite = [] {
         auto& context = *context_ptr;
         "collective mesh validation reports asymmetric null resources"_test = [&context] {
             test_asymmetric_null_resources(context);

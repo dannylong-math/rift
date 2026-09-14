@@ -6,6 +6,8 @@ readonly DEALII_VERSION="9.8.0"
 readonly DEALII_SHA256="d8d66aac57baad145a752d3f11cf72cfa9457e3f99ae09e5c8d5c9259a83aee1"
 readonly SIMDUTF_VERSION="9.0.0"
 readonly SIMDUTF_SHA256="fd2ce975f29809a975a8da8843cfb3a7265af3f71be548f199d23cf65e101764"
+readonly SPDLOG_VERSION="1.17.0"
+readonly SPDLOG_SHA256="d8862955c6d74e5846b3f580b1605d2428b11d97a410d86e2fb13e857cd3a744"
 readonly P4EST_VERSION="2.8.7"
 readonly P4EST_SHA256="0a1e912f3529999ca6d62fee335d51f24b5650b586e95a03ef39ebf73936d7f4"
 readonly ZLIB_VERSION="1.3.1"
@@ -34,7 +36,7 @@ usage() {
         "  --jobs N            Parallel jobs (default: CPU count, capped at 8)" \
         "  --variant NAME      Science build variant: debug, release, or all (default: all)" \
         "  --docs-only         Install only the Sourcey documentation packages" \
-        "  --science-only      Install only simdutf, zlib, p4est, and deal.II" \
+        "  --science-only      Install only simdutf, spdlog, zlib, p4est, and deal.II" \
         "  --check             Check host prerequisites without installing" \
         "  -h, --help          Show this help"
 }
@@ -287,6 +289,36 @@ install_simdutf() {
         die "simdutf installation did not create ${package_config}"
 }
 
+install_spdlog() {
+    local source_path="$1"
+    local prefix="${INSTALL_DIR}/spdlog"
+    local build_path="${BUILD_DIR}/spdlog"
+    local package_config="${prefix}/lib/cmake/spdlog/spdlogConfig.cmake"
+
+    if [[ -f "${package_config}" ]]; then
+        printf 'spdlog is already installed in %s\n' "${prefix}"
+        return
+    fi
+
+    printf 'Building spdlog %s\n' "${SPDLOG_VERSION}"
+    cmake \
+        -S "${source_path}" \
+        -B "${build_path}" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="${prefix}" \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DSPDLOG_BUILD_SHARED=OFF \
+        -DSPDLOG_BUILD_EXAMPLE=OFF \
+        -DSPDLOG_BUILD_EXAMPLE_HO=OFF \
+        -DSPDLOG_BUILD_TESTS=OFF \
+        -DSPDLOG_BUILD_TESTS_HO=OFF \
+        -DSPDLOG_BUILD_BENCH=OFF
+    cmake --build "${build_path}" --parallel "${JOBS}" --target install
+
+    [[ -f "${package_config}" ]] ||
+        die "spdlog installation did not create ${package_config}"
+}
+
 install_p4est_variant() {
     local source_path="$1"
     local variant="$2"
@@ -410,6 +442,7 @@ install_dealii_variant() {
 
 install_science_dependencies() {
     local simdutf_archive="${DOWNLOAD_DIR}/simdutf-${SIMDUTF_VERSION}.tar.gz"
+    local spdlog_archive="${DOWNLOAD_DIR}/spdlog-${SPDLOG_VERSION}.tar.gz"
     local zlib_archive="${DOWNLOAD_DIR}/zlib-${ZLIB_VERSION}.tar.gz"
     local p4est_archive="${DOWNLOAD_DIR}/p4est-${P4EST_VERSION}.tar.gz"
     local dealii_archive="${DOWNLOAD_DIR}/dealii-${DEALII_VERSION}.tar.gz"
@@ -418,6 +451,10 @@ install_science_dependencies() {
         "https://github.com/simdutf/simdutf/archive/refs/tags/v${SIMDUTF_VERSION}.tar.gz" \
         "${SIMDUTF_SHA256}" \
         "${simdutf_archive}"
+    download_archive \
+        "https://github.com/gabime/spdlog/archive/refs/tags/v${SPDLOG_VERSION}.tar.gz" \
+        "${SPDLOG_SHA256}" \
+        "${spdlog_archive}"
     download_archive \
         "https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.gz" \
         "${ZLIB_SHA256}" \
@@ -432,16 +469,19 @@ install_science_dependencies() {
         "${dealii_archive}"
 
     local simdutf_source="${SOURCE_DIR}/simdutf-${SIMDUTF_VERSION}"
+    local spdlog_source="${SOURCE_DIR}/spdlog-${SPDLOG_VERSION}"
     local zlib_source="${SOURCE_DIR}/zlib-${ZLIB_VERSION}"
     local p4est_source="${SOURCE_DIR}/p4est-${P4EST_VERSION}"
     local dealii_source="${SOURCE_DIR}/dealii-${DEALII_VERSION}"
 
     extract_archive "${simdutf_archive}" "${simdutf_source}"
+    extract_archive "${spdlog_archive}" "${spdlog_source}"
     extract_archive "${zlib_archive}" "${zlib_source}"
     extract_archive "${p4est_archive}" "${p4est_source}"
     extract_archive "${dealii_archive}" "${dealii_source}"
 
     install_simdutf "${simdutf_source}"
+    install_spdlog "${spdlog_source}"
     install_zlib "${zlib_source}"
 
     if [[ "${SCIENCE_VARIANT}" == "debug" || "${SCIENCE_VARIANT}" == "all" ]]; then

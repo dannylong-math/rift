@@ -33,7 +33,7 @@ int main()
 {
     using namespace boost::ut;
 
-    const suite<"Phase graph"> suite = [] {
+    [[maybe_unused]] const suite<"Phase graph"> suite = [] {
         "phase and interface IDs preserve zero-based values and ordering"_test = [] {
             constexpr auto first_phase = rift::PhaseId::from_index(0);
             constexpr auto second_phase = rift::PhaseId::from_index(1);
