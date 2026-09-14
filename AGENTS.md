@@ -68,6 +68,12 @@
   custom MPI wrappers or test registries. The context test creates its Rift
   context around `Catch::Session` so the context owns MPI initialization and
   finalization.
+- GitHub CI uses Open MPI with `-DMPIEXEC_PREFLAGS=--oversubscribe` and runs
+  CTest with `--parallel 1`, allowing the three-rank test on two-core runners.
+  Keep MPI unit tests small in memory and runtime; oversubscribed runs provide
+  correctness evidence, not performance evidence. Keep this launcher flag in
+  the Open MPI CI configurations rather than shared presets, since local MPI
+  implementations may not support it.
 - Run one test with:
 
   ```console

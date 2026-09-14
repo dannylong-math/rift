@@ -50,11 +50,18 @@ class ContextImpl;
  */
 class Context {
 private:
+    /**
+     * \brief Take shared ownership of initialized context services.
+     * \param impl Non-null implementation created by make_context().
+     */
     explicit Context(std::shared_ptr<detail::ContextImpl> impl) noexcept : impl_(std::move(impl)) {}
 
+    /** \brief Shared services; empty only after this handle has been moved from. */
     std::shared_ptr<detail::ContextImpl> impl_;
 
+    /** \brief Allow the factory to construct a handle around initialized services. */
     friend Context make_context(int& argc, char**& argv, MPI_Comm mpi_comm);
+    /** \brief Allow Rift's internal accessor to borrow the shared implementation. */
     friend detail::ContextImpl& detail::context_impl(const Context& context) noexcept;
 };
 
@@ -103,6 +110,13 @@ public:
     [[nodiscard]] dealii::TimerOutput& timer() noexcept { return timer_; }
 
 private:
+    /**
+     * \brief Initialize MPI before constructing the services that depend on it.
+     * \param argc Argument count passed through to MPI initialization.
+     * \param argv Argument vector passed through to MPI initialization.
+     * \param mpi_comm Borrowed communicator that must outlive the services.
+     * Initialization and allocation failures propagate to make_context().
+     */
     ContextImpl(int& argc, char**& argv, MPI_Comm mpi_comm) :
         mpi_init_finalize_(argc, argv),
         mpi_comm_(mpi_comm),
@@ -111,17 +125,24 @@ private:
     {
     }
 
-    // Initialize MPI first and finalize it after every other service is destroyed.
+    /** \brief Initialize MPI first and finalize it after all other services are destroyed. */
     dealii::Utilities::MPI::MPI_InitFinalize mpi_init_finalize_;
+    /** \brief Borrowed communicator used for rank queries and collective timing. */
     MPI_Comm mpi_comm_;
 
+    /** \brief Centralized log stream using deal.II's default configuration. */
     dealii::LogStream log_stream_;
+    /** \brief std::cout wrapper enabled only on communicator rank zero. */
     dealii::ConditionalOStream pcout_;
+    /** \brief Collective wall-time measurements with automatic output disabled. */
     dealii::TimerOutput timer_;
 
+    /** \brief Next local phase index, protected by mutex_. */
     std::size_t n_phases_registered_{0};
+    /** \brief Serialize local phase-index allocation. */
     std::mutex mutex_;
 
+    /** \brief Allow only the factory to construct the shared services. */
     friend Context rift::make_context(int& argc, char**& argv, MPI_Comm mpi_comm);
 };
 
