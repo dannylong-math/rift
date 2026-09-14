@@ -3,9 +3,10 @@
 ## Current scope
 
 - Rift is a C++23 research library for sharp-interface multiphase flow.
-- The library is being redesigned. Its only current public API is semantic
-  version information in `rift/version.hpp`; foundation APIs and tutorials have
-  been removed. Do not present historical designs as implemented behavior.
+- The library is being redesigned. Its current public APIs are semantic
+  version information in `rift/version.hpp` and the shared context handle in
+  `rift/context.hpp`; previous foundation APIs and tutorials have been removed.
+  Do not present historical designs as implemented behavior.
 - The previous implementation is preserved at Git tag
   `reference/pre-reset-status`. Consult it with
   `git show reference/pre-reset-status:<path>` or list its files with
@@ -64,7 +65,9 @@
   sources and registers each executable through CMake's `MPIEXEC_*` variables
   at one, two, and three ranks. MPI test executables link `Catch2::Catch2` and
   provide an MPI-aware `main` that runs `Catch::Session`; do not introduce
-  custom MPI wrappers or test registries. There are currently no MPI tests.
+  custom MPI wrappers or test registries. The context test creates its Rift
+  context around `Catch::Session` so the context owns MPI initialization and
+  finalization.
 - Run one test with:
 
   ```console
