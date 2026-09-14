@@ -39,6 +39,13 @@ project(rift
     LANGUAGES CXX
 )
 
+find_package(simdutf 9.0.0 EXACT REQUIRED CONFIG
+    HINTS "${RIFT_DEPENDENCIES_DIR}/install/simdutf/lib/cmake/simdutf"
+)
+find_package(spdlog 1.17.0 EXACT REQUIRED CONFIG
+    HINTS "${RIFT_DEPENDENCIES_DIR}/install/spdlog/lib/cmake/spdlog"
+)
+
 # Prevent in-source builds.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
     message(FATAL_ERROR
@@ -79,13 +86,23 @@ endif()
 add_library(rift_coverage INTERFACE)
 option(ENABLE_COVERAGE "Instrument tests for code coverage" OFF)
 if(ENABLE_COVERAGE)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(rift_coverage INTERFACE
             --coverage
             -O0
             -g
         )
         target_link_options(rift_coverage INTERFACE --coverage)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(rift_coverage INTERFACE
+            -fprofile-instr-generate
+            -fcoverage-mapping
+            -O0
+            -g
+        )
+        target_link_options(rift_coverage INTERFACE
+            -fprofile-instr-generate
+        )
     else()
         message(FATAL_ERROR "ENABLE_COVERAGE requires GCC or Clang")
     endif()
@@ -93,13 +110,12 @@ endif()
 
 option(ENABLE_CLANG_TIDY "Run clang-tidy during compilation" OFF)
 if(ENABLE_CLANG_TIDY)
-    find_program(CLANG_TIDY_EXE NAMES clang-tidy REQUIRED)
+    string(REGEX MATCH "^[0-9]+" CLANG_TIDY_COMPILER_MAJOR "${CMAKE_CXX_COMPILER_VERSION}")
+    find_program(CLANG_TIDY_EXE NAMES "clang-tidy-${CLANG_TIDY_COMPILER_MAJOR}" clang-tidy REQUIRED)
     set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")
 endif()
 
-add_library(rift STATIC
-    src/rift.cpp
-)
+add_library(rift STATIC src/rift.cpp)
 add_library(rift::rift ALIAS rift)
 
 target_include_directories(rift PUBLIC
@@ -111,6 +127,8 @@ target_link_libraries(rift
     rift_warnings
     rift_sanitizers
     rift_coverage
+    simdutf::simdutf
+    spdlog::spdlog
 )
 deal_ii_setup_target(rift)
 

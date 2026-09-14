@@ -3,12 +3,20 @@
 ## Current scope
 
 - Rift is a C++23 research library for sharp-interface multiphase flow.
-- This branch is a clean-slate re-foundation. The implemented public surface is
-  currently limited to the semantic version API in `include/rift/version.hpp`.
-  Do not present designs in local architecture notes as implemented behavior.
-- The scientific dependency stack is deal.II 9.8.0, p4est 2.8.7, zlib 1.3.1,
-  and MPI. Unit tests use Boost.UT 2.3.1, and Sourcey 3.6.5 builds the
-  documentation.
+- The library is being redesigned. Its only current public API is semantic
+  version information in `rift/version.hpp`; foundation APIs and tutorials have
+  been removed. Do not present historical designs as implemented behavior.
+- The previous implementation is preserved at Git tag
+  `reference/pre-reset-status`. Consult it with
+  `git show reference/pre-reset-status:<path>` or list its files with
+  `git ls-tree -r --name-only reference/pre-reset-status`. Its architecture and
+  APIs are historical reference, not requirements for the redesign.
+- `docs/development/foundations/` and
+  `docs/development/first-pde-demonstration/` contain archived plans, not active
+  implementation instructions.
+- The scientific dependency stack is deal.II 9.8.0, simdutf 9.0.0, spdlog
+  1.17.0, p4est 2.8.7, zlib 1.3.1, and MPI. Unit tests use Catch2 3.16.0, and
+  Sourcey 3.6.5 builds the documentation.
 - Rift is pre-release software. Source and ABI compatibility are not yet gates,
   but update every in-repository caller, test, and document with an API change.
 
@@ -20,7 +28,8 @@
   ./scripts/install_dependencies.sh --check
   ```
 
-- Dependency installation writes only under `.dependencies/`. It is expensive,
+- Dependency installation writes only under `.dependencies/` or an explicitly
+  selected project-local prefix such as `.dependencies-gcc/`. It is expensive,
   may download archives, and may run `npm ci`; do not run it merely for
   discovery or without the user's approval.
 - Configure, build, and test Debug with:
@@ -38,24 +47,34 @@
 
 ## Tests
 
-- `tests/CMakeLists.txt` non-recursively discovers every `tests/*.cpp` file and
+- `tests/CMakeLists.txt` non-recursively discovers every `tests/*_test.cpp` file and
   creates one executable and one same-named CTest for it. Adding a normal test
-  requires only a new `.cpp` file in that directory.
-- All C++ unit tests use Boost.UT. Define named `_test` cases directly in each
-  test source and use `expect()` assertions with meaningful comparisons. Do not
-  use `assert`, whose checks disappear in Release builds.
+  requires only a new `*_test.cpp` file in that directory.
+- All C++ unit tests use Catch2 3.16.0. Include
+  `<catch2/catch_test_macros.hpp>`, define named `TEST_CASE` cases, and use
+  `CHECK` or `REQUIRE` with meaningful comparisons. Ordinary test executables
+  link `Catch2::Catch2WithMain`; do not supply a separate `main`. Do not use
+  `assert`, whose checks disappear in Release builds.
 - Keep each test source self-contained. Do not recreate the previous physical
   registration headers, subject-runner modes, or test registries.
 - Name tests after the behavior or public object they verify, using a `_test.cpp`
   suffix. Keep independent oracles and cover failure behavior as well as the
   expected path.
-- No MPI test harness is currently defined. Introducing multi-rank tests is a
-  separate design decision; do not recreate the previous MPI wrappers or test
-  registries without user approval.
+- The retained MPI infrastructure non-recursively discovers `tests/mpi/*_test.cpp`
+  sources and registers each executable through CMake's `MPIEXEC_*` variables
+  at one, two, and three ranks. MPI test executables link `Catch2::Catch2` and
+  provide an MPI-aware `main` that runs `Catch::Session`; do not introduce
+  custom MPI wrappers or test registries. There are currently no MPI tests.
 - Run one test with:
 
   ```console
   ctest --preset debug -R '^<test_name>$' --output-on-failure
+  ```
+
+- Run every MPI variant with:
+
+  ```console
+  ctest --preset debug -L mpi --output-on-failure
   ```
 
 ## Coverage
@@ -63,27 +82,44 @@
 - Coverage scope is first-party code under `include/rift/` and `src/`.
 - Required line, function, and branch coverage are each 100 percent for
   in-scope work. Coverage is a gate, not evidence that test oracles are strong.
-- The supported coverage path is GCC `--coverage` instrumentation plus gcovr
-  8.6. It produces one Cobertura file for Codecov:
+- Create the ignored project-local coverage environment with:
 
   ```console
-  cmake -S . -B build/coverage -G Ninja \
-    -DCMAKE_BUILD_TYPE=Debug \
-    -DBUILD_TESTING=ON \
-    -DENABLE_SANITIZERS=OFF \
-    -DENABLE_COVERAGE=ON
-  cmake --build build/coverage --parallel 6
-  ctest --test-dir build/coverage --output-on-failure
-  gcovr --root . \
-    --filter 'include/rift/' \
-    --filter 'src/' \
-    --print-summary \
-    --fail-under-line 100 \
-    --fail-under-function 100 \
-    --fail-under-branch 100 \
-    --cobertura-pretty \
-    --output coverage.xml \
-    build/coverage
+  python3 -m venv .venv
+  .venv/bin/python -m pip install gcovr==8.6
+  ```
+
+- Run the supported compiler-specific coverage presets through:
+
+  ```console
+  ./scripts/run_coverage.sh gcc
+  ./scripts/run_coverage.sh clang
+  ```
+
+- GCC uses an isolated GCC-built deal.II stack under `.dependencies-gcc/`.
+  Raw GCC metrics are in `build/gcc-coverage/coverage-raw-summary.json`;
+  policy-adjusted metrics and Cobertura are in `coverage-summary.json` and
+  `coverage.xml` in that directory. Clang writes `coverage.json`,
+  `coverage.lcov`, and `coverage-summary.json` under `build/clang-coverage/`.
+  Both commands require nonempty first-party line/function coverage and check
+  line, function, and branch coverage. The version-only baseline has no
+  branches to exercise; a zero branch denominator is reported as not
+  applicable. There are no approved coverage exclusions for the baseline, so
+  raw and policy-adjusted metrics are identical.
+
+- Build the isolated GCC scientific dependencies once, with the system OpenMPI
+  wrappers selected consistently across C, C++, Fortran, and the launcher:
+
+  ```console
+  env -u CMAKE_PREFIX_PATH -u LD_LIBRARY_PATH -u PETSC_DIR -u PETSC_ARCH \
+    CC=/usr/bin/gcc CXX=/usr/bin/g++ FC=/usr/bin/gfortran \
+    OMPI_CC=/usr/bin/gcc OMPI_CXX=/usr/bin/g++ OMPI_FC=/usr/bin/gfortran \
+    MPI_C_COMPILER=/usr/bin/mpicc.openmpi \
+    MPI_CXX_COMPILER=/usr/bin/mpicxx.openmpi \
+    MPI_Fortran_COMPILER=/usr/bin/mpif90.openmpi \
+    MPIEXEC_EXECUTABLE=/usr/bin/mpiexec.openmpi \
+    ./scripts/install_dependencies.sh --prefix .dependencies-gcc \
+      --science-only --variant debug --jobs 6
   ```
 
 - `.github/workflows/ci.yml` runs the full GCC and Clang unit-test matrix on
@@ -109,8 +145,9 @@
   ```
 
 - Run `./format.sh` before submitting C++ changes.
-- Keep user-owned, ignored files under `docs/architecture/` intact. Change them
-  only when the user explicitly includes those planning documents in scope.
+- Keep user-owned, ignored files under `docs/architecture/` and `_planning/`
+  intact. Change them only when the user explicitly includes those planning
+  documents in scope.
 
 ## Git
 

@@ -1,17 +1,13 @@
-#include <boost/ut.hpp>
+#include <catch2/catch_test_macros.hpp>
 #include <rift/version.hpp>
 
-int main()
+static_assert(noexcept(rift::current_version()));
+
+TEST_CASE("Rift reports its configured semantic version", "[version]")
 {
-    using namespace boost::ut;
+    const auto version = rift::current_version();
 
-    "Rift reports its configured semantic version"_test = [] {
-        const auto version = rift::current_version();
-
-        expect(version.major == 0_i);
-        expect(version.minor == 1_i);
-        expect(version.patch == 0_i);
-    };
-
-    return static_cast<int>(cfg<>.run());
+    CHECK(version.major == 0);
+    CHECK(version.minor == 1);
+    CHECK(version.patch == 0);
 }

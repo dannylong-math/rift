@@ -2,6 +2,7 @@ build/
 build-*/
 .cache/
 .dependencies/
+.dependencies-*/
 __pycache__/
 compile_commands.json
 docs/dist/
