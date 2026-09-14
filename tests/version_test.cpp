@@ -3,7 +3,7 @@
 
 static_assert(noexcept(rift::current_version()));
 
-TEST_CASE("Rift reports its configured semantic version")
+TEST_CASE("Rift reports its configured semantic version","[version]")
 {
     const auto version = rift::current_version();
 

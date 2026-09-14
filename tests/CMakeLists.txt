@@ -11,6 +11,12 @@ FetchContent_MakeAvailable(Catch2)
 # Apply Rift's clang-tidy policy to first-party code, not the fetched framework.
 set_target_properties(Catch2 Catch2WithMain PROPERTIES CXX_CLANG_TIDY "")
 
+# Treat framework headers and their macro expansions as third-party code in
+# consumers too; keep clang-tidy enabled for Rift's test bodies.
+get_target_property(catch2_include_directories Catch2 INTERFACE_INCLUDE_DIRECTORIES)
+target_include_directories(Catch2 SYSTEM INTERFACE ${catch2_include_directories})
+unset(catch2_include_directories)
+
 file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*_test.cpp")
 
 foreach(test_source IN LISTS TEST_SOURCES)
