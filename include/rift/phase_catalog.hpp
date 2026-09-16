@@ -81,15 +81,7 @@ public:
                  }
     PhaseId emplace(std::string name, Args&&... args)
     {
-        AssertThrow(!frozen_, dealii::ExcMessage("Cannot register a phase after the PhaseCatalog is frozen."));
-        AssertThrow(!dealii::Utilities::trim(name).empty(),
-                    dealii::ExcMessage("A phase name must contain at least one non-whitespace character."));
-
-        const bool name_exists =
-            std::ranges::any_of(phases_, [&name](const auto& phase) { return phase->descriptor().name() == name; });
-        AssertThrow(!name_exists, dealii::ExcMessage("A phase named '" + name + "' is already registered."));
-
-        const PhaseId id(phases_.size());
+        const PhaseId id = validate_registration(name);
         PhaseDescriptor descriptor(id, std::move(name), ModelId(std::string(ConcretePhase::model_identifier())),
                                    DiscretizationId(std::string(ConcretePhase::discretization_identifier())));
         auto phase = std::make_unique<ConcretePhase>(std::move(descriptor), std::forward<Args>(args)...);
@@ -144,6 +136,19 @@ public:
     }
 
 private:
+    /** \brief Validate common preconditions and return the next candidate ID. */
+    [[nodiscard]] PhaseId validate_registration(const std::string& name) const
+    {
+        AssertThrow(!frozen_, dealii::ExcMessage("Cannot register a phase after the PhaseCatalog is frozen."));
+        AssertThrow(!dealii::Utilities::trim(name).empty(),
+                    dealii::ExcMessage("A phase name must contain at least one non-whitespace character."));
+
+        const bool name_exists =
+            std::ranges::any_of(phases_, [&name](const auto& phase) { return phase->descriptor().name() == name; });
+        AssertThrow(!name_exists, dealii::ExcMessage("A phase named '" + name + "' is already registered."));
+        return PhaseId(phases_.size());
+    }
+
     /** \brief Serializable values for ID, name, model, and discretization. */
     using DescriptorSignature = std::array<std::string, 4>;
     /** \brief Ordered semantic signature of one rank's complete catalog. */
@@ -156,9 +161,9 @@ private:
         signature.reserve(phases_.size());
         for (const auto& phase : phases_) {
             const auto& descriptor = phase->descriptor();
-            signature.push_back({std::to_string(descriptor.id().index()), std::string(descriptor.name()),
-                                 std::string(descriptor.model_id().value()),
-                                 std::string(descriptor.discretization_id().value())});
+            signature.push_back(DescriptorSignature{
+                {std::to_string(descriptor.id().index()), std::string(descriptor.name()),
+                 std::string(descriptor.model_id().value()), std::string(descriptor.discretization_id().value())}});
         }
         return signature;
     }
@@ -167,7 +172,7 @@ private:
     [[nodiscard]] static std::string first_mismatch(const std::vector<CatalogSignature>& signatures)
     {
         const auto& reference = signatures.front();
-        constexpr std::array<std::string_view, 4> field_names{"id", "name", "model id", "discretization id"};
+        constexpr std::array<std::string_view, 4> field_names{{"id", "name", "model id", "discretization id"}};
 
         for (std::size_t rank = 1; rank < signatures.size(); ++rank) {
             const auto& candidate = signatures.at(rank);

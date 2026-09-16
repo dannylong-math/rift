@@ -51,13 +51,13 @@ TEST_CASE("PhaseCatalog reports the first immutable ordering mismatch", "[phase_
 {
     REQUIRE(test_context != nullptr);
 
-    const std::array<std::string_view, 3> canonical_names{"water", "oil", "vapor"};
+    const std::array<std::string_view, 3> canonical_names{{"water", "oil", "vapor"}};
     auto local_names = canonical_names;
     if (test_context->this_mpi_process() == 1) {
-        local_names = {"water", "vapor", "oil"};
+        local_names = {{"water", "vapor", "oil"}};
     }
     else if (test_context->this_mpi_process() == 2) {
-        local_names = {"ice", "oil", "vapor"};
+        local_names = {{"ice", "oil", "vapor"}};
     }
 
     Catalog catalog(*test_context);
