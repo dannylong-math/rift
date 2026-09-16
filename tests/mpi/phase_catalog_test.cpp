@@ -1,6 +1,7 @@
 #include <catch2/catch_session.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <cstdint>
 #include <cstdlib>
 // Use the public MPI header; MPICH declares functions in an unexported nested header.
 #include <mpi.h>
@@ -20,26 +21,54 @@ rift::Context* test_context = nullptr;
 
 using Catalog = rift::PhaseCatalog<2, double>;
 
-class TrackedPhase final : public rift::Phase<2, double> {
-public:
-    static constexpr std::string_view model_identifier() noexcept { return "tracked-model"; }
-    static constexpr std::string_view discretization_identifier() noexcept { return "tracked-discretization"; }
+enum class ConstructionAction : std::uint8_t { succeed, throw_exception, inspect_candidate };
 
-    TrackedPhase(rift::PhaseDescriptor descriptor, int& constructions, int& live_instances) :
-        Phase(std::move(descriptor)), live_instances_(&live_instances)
+struct ConstructionControl {
+    ConstructionAction action{ConstructionAction::succeed};
+    int constructions{0};
+    int live_instances{0};
+    const Catalog* catalog{nullptr};
+};
+
+class ConfigurablePhase final : public rift::Phase<2, double> {
+public:
+    static constexpr std::string_view model_identifier() noexcept { return "configurable-model"; }
+    static constexpr std::string_view discretization_identifier() noexcept { return "configurable-discretization"; }
+
+    ConfigurablePhase(rift::PhaseDescriptor descriptor, ConstructionControl& control) :
+        Phase(std::move(descriptor)), live_instances_(&control.live_instances)
     {
-        ++constructions;
-        ++live_instances;
+        switch (control.action) {
+        case ConstructionAction::succeed:
+            ++control.constructions;
+            ++control.live_instances;
+            owns_live_instance_ = true;
+            break;
+        case ConstructionAction::throw_exception:
+            throw std::runtime_error("intentional phase construction failure");
+        case ConstructionAction::inspect_candidate:
+            if (control.catalog == nullptr) {
+                throw std::logic_error("candidate inspection requires a catalog");
+            }
+            static_cast<void>(control.catalog->at(this->descriptor().id()));
+            break;
+        }
     }
 
-    TrackedPhase(const TrackedPhase&) = delete;
-    TrackedPhase& operator=(const TrackedPhase&) = delete;
-    TrackedPhase(TrackedPhase&&) = delete;
-    TrackedPhase& operator=(TrackedPhase&&) = delete;
-    ~TrackedPhase() override { --*live_instances_; }
+    ConfigurablePhase(const ConfigurablePhase&) = delete;
+    ConfigurablePhase& operator=(const ConfigurablePhase&) = delete;
+    ConfigurablePhase(ConfigurablePhase&&) = delete;
+    ConfigurablePhase& operator=(ConfigurablePhase&&) = delete;
+    ~ConfigurablePhase() override
+    {
+        if (owns_live_instance_) {
+            --*live_instances_;
+        }
+    }
 
 private:
     int* live_instances_;
+    bool owns_live_instance_{false};
 };
 
 class AlternatePhase final : public rift::Phase<2, double> {
@@ -48,28 +77,6 @@ public:
     static constexpr std::string_view discretization_identifier() noexcept { return "alternate-discretization"; }
 
     explicit AlternatePhase(rift::PhaseDescriptor descriptor) : Phase(std::move(descriptor)) {}
-};
-
-class ThrowingPhase final : public rift::Phase<2, double> {
-public:
-    static constexpr std::string_view model_identifier() noexcept { return "throwing-model"; }
-    static constexpr std::string_view discretization_identifier() noexcept { return "throwing-discretization"; }
-
-    explicit ThrowingPhase(rift::PhaseDescriptor descriptor) : Phase(std::move(descriptor))
-    {
-        throw std::runtime_error("intentional phase construction failure");
-    }
-};
-
-class PrematureLookupPhase final : public rift::Phase<2, double> {
-public:
-    static constexpr std::string_view model_identifier() noexcept { return "premature-lookup-model"; }
-    static constexpr std::string_view discretization_identifier() noexcept { return "premature-lookup-discretization"; }
-
-    PrematureLookupPhase(rift::PhaseDescriptor descriptor, const Catalog& catalog) : Phase(std::move(descriptor))
-    {
-        static_cast<void>(catalog.at(this->descriptor().id()));
-    }
 };
 
 static_assert(std::is_constructible_v<Catalog, rift::Context&>);
@@ -87,8 +94,7 @@ TEST_CASE("PhaseCatalog owns phases and freezes rank-local registration", "[phas
 {
     REQUIRE(test_context != nullptr);
 
-    int constructions = 0;
-    int live_instances = 0;
+    ConstructionControl construction;
     {
         Catalog catalog(*test_context);
         CHECK(catalog.empty());
@@ -103,19 +109,19 @@ TEST_CASE("PhaseCatalog owns phases and freezes rank-local registration", "[phas
                           Catch::Matchers::ContainsSubstring("non-whitespace"));
         CHECK(catalog.empty());
 
-        const auto water_id = catalog.emplace<TrackedPhase>("water", constructions, live_instances);
+        const auto water_id = catalog.emplace<ConfigurablePhase>("water", construction);
         const auto spaced_water_id = catalog.emplace<AlternatePhase>(" water ");
         CHECK(water_id.index() == 0);
         CHECK(spaced_water_id.index() == 1);
-        CHECK(constructions == 1);
-        CHECK(live_instances == 1);
+        CHECK(construction.constructions == 1);
+        CHECK(construction.live_instances == 1);
         CHECK(catalog.size() == 2);
 
         const auto& water = catalog.at(water_id).descriptor();
         CHECK(water.id() == water_id);
         CHECK(water.name() == "water");
-        CHECK(water.model_id().value() == "tracked-model");
-        CHECK(water.discretization_id().value() == "tracked-discretization");
+        CHECK(water.model_id().value() == "configurable-model");
+        CHECK(water.discretization_id().value() == "configurable-discretization");
 
         const auto& spaced_water = catalog.at(spaced_water_id).descriptor();
         CHECK(spaced_water.name() == " water ");
@@ -126,24 +132,29 @@ TEST_CASE("PhaseCatalog owns phases and freezes rank-local registration", "[phas
                           Catch::Matchers::ContainsSubstring("already registered"));
         CHECK(catalog.size() == 2);
 
-        CHECK_THROWS_WITH(catalog.emplace<ThrowingPhase>("vapor"),
+        construction.action = ConstructionAction::throw_exception;
+        CHECK_THROWS_WITH(catalog.emplace<ConfigurablePhase>("vapor", construction),
                           Catch::Matchers::ContainsSubstring("intentional phase construction failure"));
         CHECK(catalog.size() == 2);
 
-        CHECK_THROWS_WITH(catalog.emplace<PrematureLookupPhase>("candidate", catalog),
+        construction.action = ConstructionAction::inspect_candidate;
+        construction.catalog = &catalog;
+        CHECK_THROWS_WITH(catalog.emplace<ConfigurablePhase>("candidate", construction),
                           Catch::Matchers::ContainsSubstring("outside this PhaseCatalog"));
         CHECK(catalog.size() == 2);
 
+        construction.action = ConstructionAction::succeed;
         catalog.freeze_local();
         catalog.freeze_local();
         CHECK(catalog.is_frozen());
-        CHECK_THROWS_WITH(catalog.emplace<TrackedPhase>("ice", constructions, live_instances),
+        CHECK_THROWS_WITH(catalog.emplace<ConfigurablePhase>("ice", construction),
                           Catch::Matchers::ContainsSubstring("frozen"));
-        CHECK(constructions == 1);
-        CHECK(live_instances == 1);
+        CHECK_THROWS_WITH(catalog.emplace<AlternatePhase>("snow"), Catch::Matchers::ContainsSubstring("frozen"));
+        CHECK(construction.constructions == 1);
+        CHECK(construction.live_instances == 1);
         CHECK(catalog.size() == 2);
     }
-    CHECK(live_instances == 0);
+    CHECK(construction.live_instances == 0);
 
     CHECK_THROWS_WITH(Catalog(*test_context), Catch::Matchers::ContainsSubstring("already been claimed"));
 }
