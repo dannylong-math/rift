@@ -1,40 +1,49 @@
 #pragma once
 
-#include <cstddef>
+/**
+ * \file
+ * \brief Process-wide runtime ownership and shared Rift services.
+ */
+
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/base/enable_observer_pointer.h>
+#include <deal.II/base/exceptions.h>
 #include <deal.II/base/logstream.h>
 #include <deal.II/base/mpi.h>
 #include <deal.II/base/timer.h>
 #include <iostream>
 #include <memory>
-#include <mutex>
 
 namespace rift {
 
+template<int dim, typename Number> class PhaseCatalog;
+
 /**
- * \brief Owns MPI lifetime, logging, timing, and local phase registration.
+ * \brief Own the process-wide Rift runtime services for one simulation.
  *
- * A `Context` is an object with useful utility services that are used throughout
- * the library. The intent is to create one `Context` at the beginning of `main()`
- * and have other objects (internally) borrow it. The `Context` is noncopyable and
- * nonmovable, so dependents may retain `dealii::ObserverPointer<Context>` in order
- * access these utilities.
+ * Context initializes and finalizes MPI, stores the communicator used by Rift,
+ * and owns shared logging and timing services. Construct one near the beginning
+ * of main() and keep it alive until every Rift object that borrows it has been
+ * destroyed. MPI must not already be initialized when the Context is created.
  *
- * `Context` is treated as unique even if multiple instances have the same underlying values
- * within the object. This means creating two different `Context` objects with the same inputs
- * will cause interoperability issues with the other Rift objects.
+ * Context is noncopyable and nonmovable, giving
+ * [dealii::ObserverPointer](https://dealii.org/9.8.0/doxygen/deal.II/classObserverPointer.html)
+ * observers a stable address. Its object identity defines which Rift objects
+ * belong to the same simulation; separately constructed contexts are distinct
+ * even if they use the same MPI communicator. Exactly one PhaseCatalog may
+ * claim a Context during its lifetime.
  *
- * ```cpp
+ * \par Typical use
+ * \code{.cpp}
  * int main(int argc, char** argv) {
- *     // Create context initializes MPI and other utilities.
- *     rift::Context context(argc, argv);
- *     // ... rest of your program ...
- *     return 0;
- *     // Since context is the first object created in main, it will be destroyed last.
- *     // Furthermore, it is setup so that MPI is finalized last as well.
+ *   rift::Context context(argc, argv);
+ *   context.pcout() << "Running on " << context.n_mpi_processes()
+ *                   << " MPI ranks\n";
+ *
+ *   // Construct objects that borrow context here.
+ *   // They are destroyed before context finalizes MPI.
  * }
- * ```
+ * \endcode
  */
 class Context : public dealii::EnableObserverPointer {
 public:
@@ -63,8 +72,8 @@ public:
     Context(Context&&) = delete;
     /** \brief Context ownership cannot be replaced by moving. */
     Context& operator=(Context&&) = delete;
-    /** \brief Destruct the context and finalize MPI. */
-    ~Context() = default;
+    /** \brief Destroy the owned services and finalize the Context-owned MPI session. */
+    ~Context() override = default;
 
     /**
      * \brief Return the pointer identity of this live context in this process.
@@ -78,50 +87,74 @@ public:
     [[nodiscard]] const Context* id() const noexcept { return std::addressof(*this); }
 
     /**
-     * \brief Registers a phase with a rank-local identifier.
-     * \return The next index, starting at zero. The number of registrations
-     * must remain representable by std::size_t.
-     *
-     * A phase may be represented by different classes and operate on different
-     * parts of the mesh. To simplify organization, this function returns a
-     * unique index for each phase. This way, information can be stored in a container
-     * such as a `std::vector` and accessed by the phase index.
-     *
-     * This indexing is rank-local, so it is not guaranteed to be identical across ranks.
-     * If phases are registered in different orders on different ranks, the indices will not match.
+     * \brief Return this process's rank in the context communicator.
+     * \return Zero-based communicator rank.
      */
-    [[nodiscard]] std::size_t register_phase()
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return n_phases_registered_++;
-    }
-
-    /** \brief Return this process's rank in the context communicator. */
     [[nodiscard]] unsigned int this_mpi_process() const { return dealii::Utilities::MPI::this_mpi_process(mpi_comm_); }
 
-    /** \brief Return the borrowed communicator; callers must not free it. */
+    /**
+     * \brief Borrow the communicator used by Rift services.
+     * \return Communicator whose ownership remains with the caller or MPI.
+     *
+     * \warning The returned communicator is borrowed. Callers must not free it
+     * through this handle.
+     */
     [[nodiscard]] MPI_Comm mpi_comm() const noexcept { return mpi_comm_; }
 
-    /** \brief Return the number of processes in the context communicator. */
+    /**
+     * \brief Return the number of processes in the context communicator.
+     * \return Communicator size.
+     */
     [[nodiscard]] unsigned int n_mpi_processes() const { return dealii::Utilities::MPI::n_mpi_processes(mpi_comm_); }
 
-    /** \brief Borrow the context-owned log stream with deal.II's default setup. */
+    /**
+     * \brief Borrow the context-owned
+     * [dealii::LogStream](https://dealii.org/9.8.0/doxygen/deal.II/classLogStream.html)
+     * with deal.II's default setup.
+     * \return Mutable stream reference that must not outlive this Context.
+     */
     [[nodiscard]] dealii::LogStream& log_stream() noexcept { return log_stream_; }
 
-    /** \brief Borrow std::cout output enabled only on communicator rank zero. */
+    /**
+     * \brief Borrow
+     * [dealii::ConditionalOStream](https://dealii.org/9.8.0/doxygen/deal.II/classConditionalOStream.html)
+     * output enabled only on communicator rank zero.
+     * \return Mutable conditional stream that must not outlive this Context.
+     */
     [[nodiscard]] dealii::ConditionalOStream& pcout() noexcept { return pcout_; }
 
     /**
      * \brief Borrow the context-owned wall-time timer with automatic output disabled.
      *
      * Timed sections synchronize over mpi_comm() and require matching calls
-     * across ranks. Use TimerOutput::Scope to close sections before teardown.
-     * The timer must not be used concurrently by multiple threads. Borrowed
-     * service references and timer scopes must not outlive this context.
+     * across ranks. Use
+     * [dealii::TimerOutput::Scope](https://dealii.org/9.8.0/doxygen/deal.II/classTimerOutput_1_1Scope.html)
+     * to close sections before teardown. The timer must not be used
+     * concurrently by multiple threads. Borrowed service references and timer
+     * scopes must not outlive this context.
+     *
+     * \return Mutable timer reference owned by this Context.
      */
     [[nodiscard]] dealii::TimerOutput& timer() noexcept { return timer_; }
 
 private:
+    /**
+     * \brief Permanently grant this Context's sole phase-catalog claim.
+     * \throws dealii::ExceptionBase If a catalog has already claimed this
+     * Context, including a catalog that has since been destroyed.
+     *
+     * Catalog construction is a serialized configuration operation. This
+     * function does not synchronize concurrent callers.
+     */
+    void claim_phase_catalog()
+    {
+        AssertThrow(!phase_catalog_claimed_,
+                    dealii::ExcMessage("This Context has already been claimed by a PhaseCatalog."));
+        phase_catalog_claimed_ = true;
+    }
+
+    template<int dim, typename Number> friend class PhaseCatalog;
+
     /** \brief Initialize MPI first and finalize it after all other services are destroyed. */
     dealii::Utilities::MPI::MPI_InitFinalize mpi_init_finalize_;
     /** \brief Borrowed communicator used for rank queries and collective timing. */
@@ -134,10 +167,8 @@ private:
     /** \brief Collective wall-time measurements. */
     dealii::TimerOutput timer_;
 
-    /** \brief Next local phase index, protected by mutex_. */
-    std::size_t n_phases_registered_{0};
-    /** \brief Serialize local phase-index allocation. */
-    std::mutex mutex_;
+    /** \brief Whether this Context has permanently granted its catalog claim. */
+    bool phase_catalog_claimed_{false};
 };
 
 } // namespace rift

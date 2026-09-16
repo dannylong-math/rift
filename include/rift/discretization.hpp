@@ -17,36 +17,38 @@
 namespace rift {
 
 /**
- * \brief Describes the discretization of the PDEs.
+ * \brief Own the distributed background mesh for one Rift simulation.
  * \tparam dim Spatial dimension, either 2 or 3 for the distributed backend.
  *
- * This is a wrapper class that collects the `deal.II` objects related to
- * the discretization of PDEs. This includes setting up a computational mesh,
- * querying information about the mesh, degree-of-freedom information, and so on.
+ * Discretization creates, refines, queries, and exposes the
+ * [dealii::parallel::distributed::Triangulation](https://dealii.org/9.8.0/doxygen/deal.II/classparallel_1_1distributed_1_1Triangulation.html)
+ * on which phase discretizations will be built. Degree-of-freedom handlers and
+ * finite-element systems are not yet owned by this class.
  *
- * This class is meant to be observed by other objects in the Rift library. This means
- * the intent is to have a single `Discretization` per problem being solved and
- * typically a class will own an `dealii::ObserverPointer<>` to this discretization
- * if the class needs information. This has the benefit that if the `Discretization`
- * is updated in any way, the objects observing the discretization will automatically
- * have the updated information.
+ * The supplied Context must outlive the Discretization. The object is
+ * noncopyable and nonmovable so other Rift components may safely observe its
+ * stable address. Mesh mutation can invalidate iterators and data owned by
+ * those components; callers remain responsible for coordinating such updates.
  *
- * ```cpp
+ * \par Typical use
+ * \code{.cpp}
  * int main(int argc, char** argv) {
- *     constexpr int dim = 2;
- *     rift::Context context(argc, argv);
- *     rift::Discretization<dim> discretization(context);
- *     discretization.generate_grid("hyper_cube", "0 : 1 : false");
- *     // ...
+ *   rift::Context context(argc, argv);
+ *   rift::Discretization<2> discretization(context);
+ *
+ *   discretization.generate_grid("hyper_cube", "0 : 1 : false");
+ *   discretization.refine_global(2);
+ *   context.pcout() << discretization.n_global_active_cells()
+ *                   << " active cells\n";
  * }
- * ```
+ * \endcode
  */
 template<int dim>
     requires(dim == 2 || dim == 3)
 class Discretization : public dealii::EnableObserverPointer {
 public:
     /**
-     * \brief Constructor.
+     * \brief Construct an empty distributed mesh using a Context communicator.
      * \param context Borrowed mutable context, which must outlive this object.
      */
     Discretization(Context& context) :
@@ -65,7 +67,7 @@ public:
     Discretization(Discretization&&) = delete;
     /** \brief Ownership cannot be replaced by moving. */
     Discretization& operator=(Discretization&&) = delete;
-    /** \brief Destructor. */
+    /** \brief Destroy the owned triangulation. */
     ~Discretization() = default;
 
     /**
@@ -118,8 +120,8 @@ public:
      * \pre The triangulation is nonempty, even for zero refinements.
      * \pre All communicator ranks call with the same refinement count.
      *
-     * Mesh changes can invalidate cell iterators and dependent data. The caller is responsible for any field transfer
-     * or cache updates.
+     * Mesh changes can invalidate cell iterators and dependent data. The caller
+     * is responsible for field transfer and cache updates.
      */
     void refine_global(unsigned int n_global_refinements = 1) { triangulation_.refine_global(n_global_refinements); }
 
@@ -143,7 +145,7 @@ public:
     [[nodiscard]] dealii::parallel::distributed::Triangulation<dim>& triangulation() noexcept { return triangulation_; }
 
 private:
-    /** \brief Simulation context. */
+    /** \brief Borrowed simulation context that supplies the communicator. */
     dealii::ObserverPointer<Context> context_;
     /** \brief Distributed mesh owned by this discretization. */
     dealii::parallel::distributed::Triangulation<dim> triangulation_;

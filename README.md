@@ -2,8 +2,8 @@
 
 Rift is a C++23 research library for sharp-interface multiphase flow. The library
 is being redesigned; its current public API provides semantic version
-information, an owning context with observer dependencies, and a distributed
-triangulation owned by `Discretization`. The scientific
+information, an owning context with observer dependencies, a rank-local phase
+catalog, and a distributed triangulation owned by `Discretization`. The scientific
 dependency setup, build presets, tests, coverage, and documentation pipeline
 remain available for new development.
 
@@ -21,15 +21,17 @@ int main(int argc, char **argv)
 ```
 
 The noncopyable, nonmovable context owns MPI lifetime, logging, rank-zero output,
-a wall-time timer, and a local phase-index counter. Dependents store mutable
+a wall-time timer, and one permanent phase-catalog claim. Dependents store mutable
 `dealii::ObserverPointer<rift::Context>` members. Observers track lifetime but do
 not extend it. Destroy all dependents first, then destroy the context on its
 initializing thread.
 Construct only one context per program because it initializes the deal.II runtime.
 `ctx.id()` is a stable pointer identity for local compatibility checks during
 the context's lifetime; it is not a persistent or cross-rank identifier.
-Phase registration does not communicate; timer sections synchronize across
-the context communicator. Logging policy
+`PhaseCatalog<dim, Number>` is the sole phase-registration authority. Exactly
+one catalog may claim a context during its lifetime, and destroying that catalog
+does not release the claim. Local registration does not communicate; timer
+sections synchronize across the context communicator. Logging policy
 is still under design, and timer output is disabled by default. Keep the
 context in `main()` until dependent objects and worker activity finish.
 
@@ -105,7 +107,9 @@ Each `tests/*_test.cpp` file is automatically built as one same-named CTest usin
 Catch2 3.16.0. The retained MPI test infrastructure builds each `tests/mpi/*_test.cpp`
 file once and registers it as one-, two-, and three-rank CTests using the MPI
 launcher selected by CMake. The context test covers observer identity, service
-access, local phase registration, and MPI lifetime at all three process counts.
+access, and MPI lifetime at all three process counts. The phase-catalog test
+covers rank-local registration, metadata, failure atomicity, ownership, and
+local freeze.
 The separate discretization test covers Context borrowing, mesh generation,
 refinement, local/global counts, accessors, and generator error propagation in
 both two and three dimensions.

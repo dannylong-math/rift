@@ -26,7 +26,6 @@ static_assert(!std::is_move_constructible_v<rift::Context>);
 static_assert(!std::is_move_assignable_v<rift::Context>);
 static_assert(std::is_base_of_v<dealii::EnableObserverPointer, rift::Context>);
 static_assert(std::is_same_v<decltype(&rift::Context::id), const rift::Context* (rift::Context::*)() const noexcept>);
-static_assert(std::is_same_v<decltype(&rift::Context::register_phase), std::size_t (rift::Context::*)()>);
 static_assert(
     std::is_same_v<decltype(&rift::Context::pcout), dealii::ConditionalOStream& (rift::Context::*)() noexcept>);
 static_assert(std::is_same_v<decltype(&rift::Context::log_stream), dealii::LogStream& (rift::Context::*)() noexcept>);
@@ -59,12 +58,6 @@ TEST_CASE("Context observers share stable identity and mutable services", "[cont
         CHECK(test_context->this_mpi_process() == static_cast<unsigned int>(rank));
         CHECK(test_context->n_mpi_processes() == static_cast<unsigned int>(size));
 
-        // Each rank registers a different number: registration must not synchronize.
-        for (int phase = 0; phase < rank + 2; ++phase) {
-            CHECK(first->register_phase() == static_cast<std::size_t>(phase));
-        }
-        CHECK(second->register_phase() == static_cast<std::size_t>(rank + 2));
-        CHECK(test_context->register_phase() == static_cast<std::size_t>(rank + 3));
         CHECK(test_context->id() == identity);
 
         CHECK(first->pcout().is_active() == (rank == 0));
