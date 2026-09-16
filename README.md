@@ -2,27 +2,53 @@
 
 Rift is a C++23 research library for sharp-interface multiphase flow. The library
 is being redesigned; its current public API provides semantic version
-information and a shared context handle. The scientific dependency setup,
-build presets, tests, coverage, and documentation pipeline remain available
-for new development.
+information, an owning context with observer dependencies, and a distributed
+triangulation owned by `Discretization`. The scientific
+dependency setup, build presets, tests, coverage, and documentation pipeline
+remain available for new development.
 
-Create a context at the beginning of `main()` and pass copies to Rift objects:
+Create a context at the beginning of `main()` and pass it by reference to Rift
+objects:
 
 ```cpp
 #include <rift/context.hpp>
 
 int main(int argc, char **argv)
 {
-    auto ctx = rift::make_context(argc, argv);
+    rift::Context ctx(argc, argv);
     // Create and destroy dependent Rift objects while ctx remains alive.
 }
 ```
 
-The handle shares MPI lifetime, logging, rank-zero output, a wall-time timer,
-and a local phase-index counter. Phase registration does not communicate;
-timer sections synchronize across the context communicator. Logging policy
+The noncopyable, nonmovable context owns MPI lifetime, logging, rank-zero output,
+a wall-time timer, and a local phase-index counter. Dependents store mutable
+`dealii::ObserverPointer<rift::Context>` members. Observers track lifetime but do
+not extend it. Destroy all dependents first, then destroy the context on its
+initializing thread.
+Construct only one context per program because it initializes the deal.II runtime.
+`ctx.id()` is a stable pointer identity for local compatibility checks during
+the context's lifetime; it is not a persistent or cross-rank identifier.
+Phase registration does not communicate; timer sections synchronize across
+the context communicator. Logging policy
 is still under design, and timer output is disabled by default. Keep the
-original handle in `main()` until dependent objects and worker activity finish.
+context in `main()` until dependent objects and worker activity finish.
+
+`Discretization<2>` and `Discretization<3>` borrow the context and directly own
+their deal.II distributed triangulation. Grid generation and refinement require
+matching calls on every rank in the context communicator:
+
+```cpp
+#include <rift/discretization.hpp>
+
+// While ctx is alive, on every rank:
+rift::Discretization<2> discretization(ctx);
+discretization.generate_grid("hyper_cube", "0 : 1 : false");
+discretization.refine_global(2);
+```
+
+The global active-cell count excludes duplicate ghost cells; the local active
+count includes ghost and artificial cells. Finite-element spaces, DoF handling,
+and solution transfer are not implemented yet.
 
 The previous foundation implementation is preserved at Git tag
 `reference/pre-reset-status`. It is historical reference, not a required
@@ -78,8 +104,13 @@ The debug preset enables AddressSanitizer and UndefinedBehaviorSanitizer.
 Each `tests/*_test.cpp` file is automatically built as one same-named CTest using
 Catch2 3.16.0. The retained MPI test infrastructure builds each `tests/mpi/*_test.cpp`
 file once and registers it as one-, two-, and three-rank CTests using the MPI
-launcher selected by CMake. The context test covers shared services and local
-phase registration at all three process counts.
+launcher selected by CMake. The context test covers observer identity, service
+access, local phase registration, and MPI lifetime at all three process counts.
+The separate discretization test covers Context borrowing, mesh generation,
+refinement, local/global counts, accessors, and generator error propagation in
+both two and three dimensions.
+The separate context-initialization test checks rejection of an already-started
+MPI runtime and verifies that the caller's MPI session remains usable.
 
 ## Continuous integration and coverage
 
