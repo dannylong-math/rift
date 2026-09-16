@@ -2,7 +2,7 @@
   "name": "rift-docs",
   "private": true,
   "scripts": {
-    "build": "sourcey build -o dist",
+    "build": "sourcey build -o dist && node scripts/postprocess-doxygen-callouts.mjs",
     "dev": "sourcey dev"
   },
   "devDependencies": {

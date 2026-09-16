@@ -26,11 +26,12 @@ template<int dim, typename Number> class PhaseCatalog;
  * of main() and keep it alive until every Rift object that borrows it has been
  * destroyed. MPI must not already be initialized when the Context is created.
  *
- * Context is noncopyable and nonmovable, giving observers a stable address. Its
- * object identity defines which Rift objects belong to the same simulation;
- * separately constructed contexts are distinct even if they use the same MPI
- * communicator. Exactly one PhaseCatalog may claim a Context during its
- * lifetime.
+ * Context is noncopyable and nonmovable, giving
+ * [dealii::ObserverPointer](https://dealii.org/9.8.0/doxygen/deal.II/classObserverPointer.html)
+ * observers a stable address. Its object identity defines which Rift objects
+ * belong to the same simulation; separately constructed contexts are distinct
+ * even if they use the same MPI communicator. Exactly one PhaseCatalog may
+ * claim a Context during its lifetime.
  *
  * \par Typical use
  * \code{.cpp}
@@ -93,8 +94,10 @@ public:
 
     /**
      * \brief Borrow the communicator used by Rift services.
-     * \return Communicator whose ownership remains with the caller or MPI;
-     * callers must not free it through this handle.
+     * \return Communicator whose ownership remains with the caller or MPI.
+     *
+     * \warning The returned communicator is borrowed. Callers must not free it
+     * through this handle.
      */
     [[nodiscard]] MPI_Comm mpi_comm() const noexcept { return mpi_comm_; }
 
@@ -105,13 +108,17 @@ public:
     [[nodiscard]] unsigned int n_mpi_processes() const { return dealii::Utilities::MPI::n_mpi_processes(mpi_comm_); }
 
     /**
-     * \brief Borrow the context-owned log stream with deal.II's default setup.
+     * \brief Borrow the context-owned
+     * [dealii::LogStream](https://dealii.org/9.8.0/doxygen/deal.II/classLogStream.html)
+     * with deal.II's default setup.
      * \return Mutable stream reference that must not outlive this Context.
      */
     [[nodiscard]] dealii::LogStream& log_stream() noexcept { return log_stream_; }
 
     /**
-     * \brief Borrow std::cout output enabled only on communicator rank zero.
+     * \brief Borrow
+     * [dealii::ConditionalOStream](https://dealii.org/9.8.0/doxygen/deal.II/classConditionalOStream.html)
+     * output enabled only on communicator rank zero.
      * \return Mutable conditional stream that must not outlive this Context.
      */
     [[nodiscard]] dealii::ConditionalOStream& pcout() noexcept { return pcout_; }
@@ -120,9 +127,11 @@ public:
      * \brief Borrow the context-owned wall-time timer with automatic output disabled.
      *
      * Timed sections synchronize over mpi_comm() and require matching calls
-     * across ranks. Use TimerOutput::Scope to close sections before teardown.
-     * The timer must not be used concurrently by multiple threads. Borrowed
-     * service references and timer scopes must not outlive this context.
+     * across ranks. Use
+     * [dealii::TimerOutput::Scope](https://dealii.org/9.8.0/doxygen/deal.II/classTimerOutput_1_1Scope.html)
+     * to close sections before teardown. The timer must not be used
+     * concurrently by multiple threads. Borrowed service references and timer
+     * scopes must not outlive this context.
      *
      * \return Mutable timer reference owned by this Context.
      */

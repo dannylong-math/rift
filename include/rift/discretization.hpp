@@ -21,9 +21,9 @@ namespace rift {
  * \tparam dim Spatial dimension, either 2 or 3 for the distributed backend.
  *
  * Discretization creates, refines, queries, and exposes the
- * dealii::parallel::distributed::Triangulation on which phase discretizations
- * will be built. Degree-of-freedom handlers and finite-element systems are not
- * yet owned by this class.
+ * [dealii::parallel::distributed::Triangulation](https://dealii.org/9.8.0/doxygen/deal.II/classparallel_1_1distributed_1_1Triangulation.html)
+ * on which phase discretizations will be built. Degree-of-freedom handlers and
+ * finite-element systems are not yet owned by this class.
  *
  * The supplied Context must outlive the Discretization. The object is
  * noncopyable and nonmovable so other Rift components may safely observe its
