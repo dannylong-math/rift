@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * \file
+ * \brief Process-wide runtime ownership and shared Rift services.
+ */
+
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/base/enable_observer_pointer.h>
 #include <deal.II/base/exceptions.h>
@@ -14,28 +19,30 @@ namespace rift {
 template<int dim, typename Number> class PhaseCatalog;
 
 /**
- * \brief Owns MPI lifetime, logging, timing, and the phase-catalog claim.
+ * \brief Own the process-wide Rift runtime services for one simulation.
  *
- * A `Context` is an object with useful utility services that are used throughout
- * the library. The intent is to create one `Context` at the beginning of `main()`
- * and have other objects (internally) borrow it. The `Context` is noncopyable and
- * nonmovable, so dependents may retain `dealii::ObserverPointer<Context>` in order
- * access these utilities.
+ * Context initializes and finalizes MPI, stores the communicator used by Rift,
+ * and owns shared logging and timing services. Construct one near the beginning
+ * of main() and keep it alive until every Rift object that borrows it has been
+ * destroyed. MPI must not already be initialized when the Context is created.
  *
- * `Context` is treated as unique even if multiple instances have the same underlying values
- * within the object. This means creating two different `Context` objects with the same inputs
- * will cause interoperability issues with the other Rift objects.
+ * Context is noncopyable and nonmovable, giving observers a stable address. Its
+ * object identity defines which Rift objects belong to the same simulation;
+ * separately constructed contexts are distinct even if they use the same MPI
+ * communicator. Exactly one PhaseCatalog may claim a Context during its
+ * lifetime.
  *
- * ```cpp
+ * \par Typical use
+ * \code{.cpp}
  * int main(int argc, char** argv) {
- *     // Create context initializes MPI and other utilities.
- *     rift::Context context(argc, argv);
- *     // ... rest of your program ...
- *     return 0;
- *     // Since context is the first object created in main, it will be destroyed last.
- *     // Furthermore, it is setup so that MPI is finalized last as well.
+ *   rift::Context context(argc, argv);
+ *   context.pcout() << "Running on " << context.n_mpi_processes()
+ *                   << " MPI ranks\n";
+ *
+ *   // Construct objects that borrow context here.
+ *   // They are destroyed before context finalizes MPI.
  * }
- * ```
+ * \endcode
  */
 class Context : public dealii::EnableObserverPointer {
 public:
@@ -64,7 +71,7 @@ public:
     Context(Context&&) = delete;
     /** \brief Context ownership cannot be replaced by moving. */
     Context& operator=(Context&&) = delete;
-    /** \brief Destruct the context and finalize MPI. */
+    /** \brief Destroy the owned services and finalize the Context-owned MPI session. */
     ~Context() override = default;
 
     /**
@@ -78,19 +85,35 @@ public:
      */
     [[nodiscard]] const Context* id() const noexcept { return std::addressof(*this); }
 
-    /** \brief Return this process's rank in the context communicator. */
+    /**
+     * \brief Return this process's rank in the context communicator.
+     * \return Zero-based communicator rank.
+     */
     [[nodiscard]] unsigned int this_mpi_process() const { return dealii::Utilities::MPI::this_mpi_process(mpi_comm_); }
 
-    /** \brief Return the borrowed communicator; callers must not free it. */
+    /**
+     * \brief Borrow the communicator used by Rift services.
+     * \return Communicator whose ownership remains with the caller or MPI;
+     * callers must not free it through this handle.
+     */
     [[nodiscard]] MPI_Comm mpi_comm() const noexcept { return mpi_comm_; }
 
-    /** \brief Return the number of processes in the context communicator. */
+    /**
+     * \brief Return the number of processes in the context communicator.
+     * \return Communicator size.
+     */
     [[nodiscard]] unsigned int n_mpi_processes() const { return dealii::Utilities::MPI::n_mpi_processes(mpi_comm_); }
 
-    /** \brief Borrow the context-owned log stream with deal.II's default setup. */
+    /**
+     * \brief Borrow the context-owned log stream with deal.II's default setup.
+     * \return Mutable stream reference that must not outlive this Context.
+     */
     [[nodiscard]] dealii::LogStream& log_stream() noexcept { return log_stream_; }
 
-    /** \brief Borrow std::cout output enabled only on communicator rank zero. */
+    /**
+     * \brief Borrow std::cout output enabled only on communicator rank zero.
+     * \return Mutable conditional stream that must not outlive this Context.
+     */
     [[nodiscard]] dealii::ConditionalOStream& pcout() noexcept { return pcout_; }
 
     /**
@@ -100,6 +123,8 @@ public:
      * across ranks. Use TimerOutput::Scope to close sections before teardown.
      * The timer must not be used concurrently by multiple threads. Borrowed
      * service references and timer scopes must not outlive this context.
+     *
+     * \return Mutable timer reference owned by this Context.
      */
     [[nodiscard]] dealii::TimerOutput& timer() noexcept { return timer_; }
 

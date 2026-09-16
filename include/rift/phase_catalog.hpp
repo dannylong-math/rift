@@ -2,7 +2,7 @@
 
 /**
  * \file
- * \brief Rank-local ownership, registration, and inspection of physical phases.
+ * \brief Physical-phase ownership, registration, and collective agreement.
  */
 
 #include "rift/context.hpp"
@@ -26,19 +26,44 @@
 namespace rift {
 
 /**
- * \brief Owns all rank-local phases associated with one Context.
+ * \brief Own and register every physical phase associated with one Context.
  * \tparam dim Spatial dimension shared by the owned phase types.
  * \tparam Number Scalar number type shared by the coupled system.
  *
- * Exactly one catalog may claim a Context during that Context's lifetime. The
- * claim remains consumed after this catalog is destroyed. Registration and
- * collective freeze are externally serialized configuration operations.
- * Concurrent const inspection is supported only after freeze() returns.
+ * PhaseCatalog is the sole public registration boundary for phases. emplace()
+ * creates heterogeneous concrete Phase objects, assigns dense PhaseIds, and
+ * preserves registration order. freeze() then verifies that every MPI rank has
+ * the same ordered descriptors and makes the catalog immutable. Freeze the
+ * catalog before constructing coupled algebraic layouts or beginning a solve.
+ *
+ * Exactly one catalog may claim a Context during that Context's lifetime; the
+ * claim remains consumed after the catalog is destroyed. The Context must
+ * outlive the catalog. Registration and collective freeze are externally
+ * serialized configuration operations. Concurrent const inspection is
+ * supported only after freeze() returns successfully.
+ *
+ * \par Typical use
+ * Given a concrete FluidPhase satisfying the Phase extension contract:
+ *
+ * \code{.cpp}
+ * rift::Context context(argc, argv);
+ * rift::PhaseCatalog<2, double> phases(context);
+ *
+ * const rift::PhaseId liquid =
+ *     phases.emplace<FluidPhase>("liquid", 1.0e-3);
+ *
+ * // Every rank registers the same ordered descriptors, then freezes together.
+ * phases.freeze();
+ *
+ * const rift::PhaseDescriptor& descriptor = phases.at(liquid).descriptor();
+ * context.pcout() << descriptor.name() << ": "
+ *                 << descriptor.model_id().value() << '\n';
+ * \endcode
  */
 template<int dim, typename Number> class PhaseCatalog {
 public:
     /**
-     * \brief Permanently claim a Context for this catalog.
+     * \brief Create the sole phase catalog associated with a Context.
      * \param context Context that must outlive this catalog.
      * \throws dealii::ExceptionBase If any catalog has previously claimed the
      * same Context.
@@ -69,9 +94,14 @@ public:
      * existing phase name. Exceptions from phase construction and allocation
      * propagate unchanged.
      *
-     * Failure leaves the catalog unchanged. The concrete phase supplies
-     * `static constexpr` model_identifier() and discretization_identifier()
-     * functions returning `std::string_view`.
+     * Registration is rank-local and does not communicate. Register the same
+     * ordered descriptors on every rank before freeze(). The name is preserved
+     * exactly, including leading and trailing whitespace. Failure leaves the
+     * catalog unchanged and successful IDs remain valid for the catalog's
+     * lifetime.
+     *
+     * The concrete phase supplies `static constexpr` model_identifier() and
+     * discretization_identifier() functions returning `std::string_view`.
      */
     template<typename ConcretePhase, typename... Args>
         requires std::derived_from<ConcretePhase, Phase<dim, Number>> &&
@@ -92,10 +122,12 @@ public:
     /**
      * \brief Collectively verify descriptor agreement and prevent registration.
      *
-     * Every rank in the Context communicator must call this operation. The
-     * ordered phase IDs, names, model IDs, and discretization IDs are compared
-     * against rank zero. Repeated collective calls after success are
-     * idempotent.
+     * Every rank in the Context communicator must call this operation in the
+     * same collective order. The ordered phase IDs, names, model IDs, and
+     * discretization IDs are compared against rank zero. Model-specific
+     * constructor arguments are not part of this agreement. A successful call
+     * permanently closes registration. Repeated calls after success are local
+     * no-ops and need not be repeated collectively.
      *
      * \throws dealii::ExceptionBase If the catalogs differ or if every catalog
      * is empty. Every catalog remains open and unchanged after either failure.
@@ -114,20 +146,32 @@ public:
         frozen_ = true;
     }
 
-    /** \brief Return the number of successfully registered phases. */
+    /**
+     * \brief Return the number of successfully registered phases.
+     * \return Current rank-local catalog size.
+     */
     [[nodiscard]] std::size_t size() const noexcept { return phases_.size(); }
 
-    /** \brief Return whether no phases have been registered. */
+    /**
+     * \brief Return whether no phases have been registered.
+     * \return true when size() is zero.
+     */
     [[nodiscard]] bool empty() const noexcept { return phases_.empty(); }
 
-    /** \brief Return whether local registration has been frozen. */
+    /**
+     * \brief Return whether collective freeze completed successfully.
+     * \return true after a successful freeze(); false initially and after any
+     * failed freeze attempt.
+     */
     [[nodiscard]] bool is_frozen() const noexcept { return frozen_; }
 
     /**
      * \brief Borrow a registered phase by its Context-local identity.
-     * \param id Identity assigned by this Context's catalog.
+     * \param id Identity returned by this catalog's emplace().
      * \return Immutable phase reference valid while this catalog remains alive.
-     * \throws dealii::ExceptionBase If the wrapped index is outside this catalog.
+     * \throws dealii::ExceptionBase If the wrapped index is outside this
+     * catalog. IDs from another Context must not be supplied even if their
+     * indices happen to be in range.
      */
     [[nodiscard]] const Phase<dim, Number>& at(const PhaseId id) const
     {

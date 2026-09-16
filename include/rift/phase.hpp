@@ -5,7 +5,6 @@
  * \brief Phase identity, immutable metadata, and the phase type-erasure base.
  */
 
-#include <compare>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -16,11 +15,18 @@ namespace rift {
 template<int dim, typename Number> class PhaseCatalog;
 
 /**
- * \brief Dense identity of a phase within one Context.
+ * \brief Identify one registered phase within a Context.
  *
- * IDs compare by their zero-based index. They are meaningful only for objects
- * associated with the same Context and cannot be constructed by application
- * code.
+ * PhaseCatalog assigns IDs in registration order and returns them from
+ * emplace(). Use an ID to retrieve the same phase from that catalog. IDs compare
+ * by their zero-based indices, but an equal index from another Context does not
+ * identify the same phase. Application code cannot construct IDs directly.
+ *
+ * \code{.cpp}
+ * const rift::PhaseId liquid =
+ *     phases.emplace<FluidPhase>("liquid", viscosity);
+ * const auto& phase = phases.at(liquid);
+ * \endcode
  */
 class PhaseId {
 public:
@@ -46,7 +52,17 @@ private:
     std::size_t index_;
 };
 
-/** \brief Stable, human-readable identifier of a bulk phase model. */
+/**
+ * \brief Name the governing bulk model implemented by a concrete phase type.
+ *
+ * A PhaseCatalog records this owning value in each PhaseDescriptor. Concrete
+ * phase types normally supply the source string through model_identifier();
+ * callers inspect value() when selecting or reporting model behavior.
+ *
+ * \code{.cpp}
+ * const std::string_view model = phase.descriptor().model_id().value();
+ * \endcode
+ */
 class ModelId {
 public:
     /**
@@ -69,7 +85,18 @@ private:
     std::string value_;
 };
 
-/** \brief Stable, human-readable identifier of a compiled discretization. */
+/**
+ * \brief Name the compiled spatial discretization used by a concrete phase type.
+ *
+ * This identifier distinguishes alternative implementations of the same bulk
+ * model. A PhaseCatalog stores the owning value in each PhaseDescriptor, and
+ * callers may inspect value() for diagnostics and configuration checks.
+ *
+ * \code{.cpp}
+ * const std::string_view discretization =
+ *     phase.descriptor().discretization_id().value();
+ * \endcode
+ */
 class DiscretizationId {
 public:
     /**
@@ -93,10 +120,19 @@ private:
 };
 
 /**
- * \brief Immutable common metadata for one registered phase.
+ * \brief Describe the identity and implementation of one registered phase.
  *
- * The sole PhaseCatalog for a Context constructs this value transactionally.
- * Consumers may copy it but cannot replace its fields after construction.
+ * The PhaseCatalog constructs this value while registering a phase. It combines
+ * the Context-local PhaseId and application-supplied name with the concrete
+ * type's model and discretization identifiers. Consumers normally inspect a
+ * descriptor through Phase::descriptor(); they may copy it, but its fields
+ * cannot be replaced after construction.
+ *
+ * \code{.cpp}
+ * const rift::PhaseDescriptor& descriptor = phases.at(liquid).descriptor();
+ * context.pcout() << descriptor.id().index() << ": " << descriptor.name()
+ *                 << '\n';
+ * \endcode
  */
 class PhaseDescriptor {
 public:
@@ -111,13 +147,25 @@ public:
     /** \brief Destroy the owned strings and metadata values. */
     ~PhaseDescriptor() = default;
 
-    /** \brief Return the Context-local phase identity. */
+    /**
+     * \brief Return the Context-local phase identity.
+     * \return ID assigned in catalog registration order.
+     */
     [[nodiscard]] constexpr PhaseId id() const noexcept { return id_; }
-    /** \brief Borrow the application-supplied phase name. */
+    /**
+     * \brief Borrow the application-supplied phase name.
+     * \return Exact, unnormalized name supplied to PhaseCatalog::emplace().
+     */
     [[nodiscard]] std::string_view name() const noexcept { return name_; }
-    /** \brief Borrow the stable model identifier. */
+    /**
+     * \brief Borrow the governing model identifier.
+     * \return Identifier owned by this descriptor.
+     */
     [[nodiscard]] const ModelId& model_id() const noexcept { return model_id_; }
-    /** \brief Borrow the stable discretization identifier. */
+    /**
+     * \brief Borrow the compiled discretization identifier.
+     * \return Identifier owned by this descriptor.
+     */
     [[nodiscard]] const DiscretizationId& discretization_id() const noexcept { return discretization_id_; }
 
 private:
@@ -143,13 +191,41 @@ private:
 };
 
 /**
- * \brief Abstract ownership and metadata boundary for one physical phase.
+ * \brief Base class for one physical phase governed by one coherent bulk model.
  * \tparam dim Spatial dimension.
  * \tparam Number Scalar number type shared by the coupled system.
  *
- * Concrete phase specializations retain statically compiled numerical kernels.
- * Virtual dispatch through this base is reserved for coarse phase or work-range
- * operations, not cell or quadrature-point loops.
+ * Derive a concrete phase to hold model parameters and, in later interfaces,
+ * phase-specific finite-element state and operators. PhaseCatalog owns each
+ * instance and supplies its immutable PhaseDescriptor as the first constructor
+ * argument. A concrete type must also provide noexcept static constexpr
+ * model_identifier() and discretization_identifier() functions returning
+ * std::string_view.
+ *
+ * The base provides type-erased ownership and common metadata. Concrete phase
+ * types retain statically compiled numerical kernels; virtual dispatch is
+ * intended only for coarse phase or work-range operations, not cell or
+ * quadrature-point loops.
+ *
+ * \par Defining a phase type
+ * \code{.cpp}
+ * class FluidPhase final : public rift::Phase<2, double> {
+ * public:
+ *   static constexpr std::string_view model_identifier() noexcept {
+ *     return "incompressible-navier-stokes";
+ *   }
+ *
+ *   static constexpr std::string_view discretization_identifier() noexcept {
+ *     return "velocity-pressure-q2-q1";
+ *   }
+ *
+ *   FluidPhase(rift::PhaseDescriptor descriptor, const double viscosity)
+ *       : Phase(std::move(descriptor)), viscosity_(viscosity) {}
+ *
+ * private:
+ *   double viscosity_;
+ * };
+ * \endcode
  */
 template<int dim, typename Number> class Phase {
 public:
