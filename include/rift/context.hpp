@@ -1,19 +1,20 @@
 #pragma once
 
-#include <cstddef>
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/base/enable_observer_pointer.h>
+#include <deal.II/base/exceptions.h>
 #include <deal.II/base/logstream.h>
 #include <deal.II/base/mpi.h>
 #include <deal.II/base/timer.h>
 #include <iostream>
 #include <memory>
-#include <mutex>
 
 namespace rift {
 
+template<int dim, typename Number> class PhaseCatalog;
+
 /**
- * \brief Owns MPI lifetime, logging, timing, and local phase registration.
+ * \brief Owns MPI lifetime, logging, timing, and the phase-catalog claim.
  *
  * A `Context` is an object with useful utility services that are used throughout
  * the library. The intent is to create one `Context` at the beginning of `main()`
@@ -64,7 +65,7 @@ public:
     /** \brief Context ownership cannot be replaced by moving. */
     Context& operator=(Context&&) = delete;
     /** \brief Destruct the context and finalize MPI. */
-    ~Context() = default;
+    ~Context() override = default;
 
     /**
      * \brief Return the pointer identity of this live context in this process.
@@ -76,25 +77,6 @@ public:
      * be reused after destruction.
      */
     [[nodiscard]] const Context* id() const noexcept { return std::addressof(*this); }
-
-    /**
-     * \brief Registers a phase with a rank-local identifier.
-     * \return The next index, starting at zero. The number of registrations
-     * must remain representable by std::size_t.
-     *
-     * A phase may be represented by different classes and operate on different
-     * parts of the mesh. To simplify organization, this function returns a
-     * unique index for each phase. This way, information can be stored in a container
-     * such as a `std::vector` and accessed by the phase index.
-     *
-     * This indexing is rank-local, so it is not guaranteed to be identical across ranks.
-     * If phases are registered in different orders on different ranks, the indices will not match.
-     */
-    [[nodiscard]] std::size_t register_phase()
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return n_phases_registered_++;
-    }
 
     /** \brief Return this process's rank in the context communicator. */
     [[nodiscard]] unsigned int this_mpi_process() const { return dealii::Utilities::MPI::this_mpi_process(mpi_comm_); }
@@ -122,6 +104,23 @@ public:
     [[nodiscard]] dealii::TimerOutput& timer() noexcept { return timer_; }
 
 private:
+    /**
+     * \brief Permanently grant this Context's sole phase-catalog claim.
+     * \throws dealii::ExceptionBase If a catalog has already claimed this
+     * Context, including a catalog that has since been destroyed.
+     *
+     * Catalog construction is a serialized configuration operation. This
+     * function does not synchronize concurrent callers.
+     */
+    void claim_phase_catalog()
+    {
+        AssertThrow(!phase_catalog_claimed_,
+                    dealii::ExcMessage("This Context has already been claimed by a PhaseCatalog."));
+        phase_catalog_claimed_ = true;
+    }
+
+    template<int dim, typename Number> friend class PhaseCatalog;
+
     /** \brief Initialize MPI first and finalize it after all other services are destroyed. */
     dealii::Utilities::MPI::MPI_InitFinalize mpi_init_finalize_;
     /** \brief Borrowed communicator used for rank queries and collective timing. */
@@ -134,10 +133,8 @@ private:
     /** \brief Collective wall-time measurements. */
     dealii::TimerOutput timer_;
 
-    /** \brief Next local phase index, protected by mutex_. */
-    std::size_t n_phases_registered_{0};
-    /** \brief Serialize local phase-index allocation. */
-    std::mutex mutex_;
+    /** \brief Whether this Context has permanently granted its catalog claim. */
+    bool phase_catalog_claimed_{false};
 };
 
 } // namespace rift
