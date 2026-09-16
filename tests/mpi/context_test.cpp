@@ -1,73 +1,104 @@
 #include <catch2/catch_session.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
+#include <deal.II/base/conditional_ostream.h>
+#include <deal.II/base/enable_observer_pointer.h>
+#include <deal.II/base/logstream.h>
+#include <deal.II/base/observer_pointer.h>
+#include <deal.II/base/timer.h>
 #include <iostream>
+// Use the public MPI header; MPICH declares functions in an unexported nested header.
+#include <mpi.h>
 #include <rift/context.hpp>
 #include <type_traits>
-#include <utility>
-#include <vector>
 
 namespace {
-const rift::Context* test_context = nullptr;
-}
+// Borrow the mutable Context owned by main across Catch2 test callbacks.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+rift::Context* test_context = nullptr;
+} // namespace
 
 static_assert(!std::is_default_constructible_v<rift::Context>);
-static_assert(std::is_copy_constructible_v<rift::Context>);
-static_assert(std::is_copy_assignable_v<rift::Context>);
-static_assert(!std::is_constructible_v<rift::Context, int&, char**&>);
+static_assert(std::is_constructible_v<rift::Context, int&, char**&>);
+static_assert(!std::is_copy_constructible_v<rift::Context>);
+static_assert(!std::is_copy_assignable_v<rift::Context>);
+static_assert(!std::is_move_constructible_v<rift::Context>);
+static_assert(!std::is_move_assignable_v<rift::Context>);
+static_assert(std::is_base_of_v<dealii::EnableObserverPointer, rift::Context>);
+static_assert(std::is_same_v<decltype(&rift::Context::id), const rift::Context* (rift::Context::*)() const noexcept>);
+static_assert(std::is_same_v<decltype(&rift::Context::register_phase), std::size_t (rift::Context::*)()>);
+static_assert(
+    std::is_same_v<decltype(&rift::Context::pcout), dealii::ConditionalOStream& (rift::Context::*)() noexcept>);
+static_assert(std::is_same_v<decltype(&rift::Context::log_stream), dealii::LogStream& (rift::Context::*)() noexcept>);
+static_assert(std::is_same_v<decltype(&rift::Context::timer), dealii::TimerOutput& (rift::Context::*)() noexcept>);
 
-TEST_CASE("Context shares MPI services and local phase indices", "[context][mpi]")
+// Catch2 assertion expansions inflate complexity; preserve the shared lifetime scenario.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_CASE("Context observers share stable identity and mutable services", "[context][mpi]")
 {
     REQUIRE(test_context != nullptr);
-    auto copy = *test_context;
-    auto& impl = rift::detail::context_impl(copy);
-    CHECK(&impl == &rift::detail::context_impl(*test_context));
-
-    auto moved = std::move(copy);
-    CHECK(&rift::detail::context_impl(moved) == &impl);
-    copy = moved;
-    CHECK(&rift::detail::context_impl(copy) == &impl);
-
-    int rank = -1;
-    int size = 0;
-    REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
-    REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
-    CHECK(impl.mpi_comm() == MPI_COMM_WORLD);
-    CHECK(impl.this_mpi_process() == static_cast<unsigned int>(rank));
-    CHECK(impl.n_mpi_processes() == static_cast<unsigned int>(size));
-
-    // Each rank registers a different number: registration must not synchronize.
-    std::vector<int> phases;
-    for (int phase = 0; phase < rank + 2; ++phase) {
-        CHECK(impl.register_phase() == phases.size());
-        phases.push_back(phase);
-    }
-    CHECK(rift::detail::context_impl(*test_context).register_phase() == phases.size());
-
-    CHECK(impl.pcout().is_active() == (rank == 0));
-    CHECK(&impl.pcout().get_stream() == &std::cout);
-    CHECK(&impl.log_stream() == &rift::detail::context_impl(moved).log_stream());
-    CHECK_FALSE(impl.log_stream().has_file());
-    CHECK(&impl.timer() == &rift::detail::context_impl(moved).timer());
-
+    const auto* const identity = test_context->id();
+    CHECK(identity == test_context);
+    const auto subscriptions = test_context->n_subscriptions();
     {
-        dealii::TimerOutput::Scope section(impl.timer(), "context test");
+        const dealii::ObserverPointer<rift::Context> first(test_context, "first test observer");
+        const dealii::ObserverPointer<rift::Context> second(test_context, "second test observer");
+        CHECK(test_context->n_subscriptions() == subscriptions + 2);
+        CHECK(first.get() == test_context);
+        CHECK(second.get() == test_context);
+        CHECK(first->id() == identity);
+        CHECK(second->id() == identity);
+
+        int rank = -1;
+        int size = 0;
+        // NOLINTNEXTLINE(misc-include-cleaner): the MPI API is provided by <mpi.h>.
+        REQUIRE(MPI_Comm_rank(MPI_COMM_WORLD, &rank) == MPI_SUCCESS);
+        // NOLINTNEXTLINE(misc-include-cleaner): the MPI API is provided by <mpi.h>.
+        REQUIRE(MPI_Comm_size(MPI_COMM_WORLD, &size) == MPI_SUCCESS);
+        CHECK(test_context->mpi_comm() == MPI_COMM_WORLD);
+        CHECK(test_context->this_mpi_process() == static_cast<unsigned int>(rank));
+        CHECK(test_context->n_mpi_processes() == static_cast<unsigned int>(size));
+
+        // Each rank registers a different number: registration must not synchronize.
+        for (int phase = 0; phase < rank + 2; ++phase) {
+            CHECK(first->register_phase() == static_cast<std::size_t>(phase));
+        }
+        CHECK(second->register_phase() == static_cast<std::size_t>(rank + 2));
+        CHECK(test_context->register_phase() == static_cast<std::size_t>(rank + 3));
+        CHECK(test_context->id() == identity);
+
+        CHECK(first->pcout().is_active() == (rank == 0));
+        CHECK(&first->pcout().get_stream() == &std::cout);
+        CHECK(&first->pcout() == &second->pcout());
+        CHECK(&test_context->pcout() == &first->pcout());
+        CHECK(&first->log_stream() == &second->log_stream());
+        CHECK(&test_context->log_stream() == &first->log_stream());
+        CHECK_FALSE(first->log_stream().has_file());
+        CHECK(&first->timer() == &second->timer());
+        CHECK(&test_context->timer() == &first->timer());
+
+        {
+            const dealii::TimerOutput::Scope section(test_context->timer(), "context test");
+        }
+        const auto calls = second->timer().get_summary_data(dealii::TimerOutput::n_calls);
+        REQUIRE(calls.size() == 1);
+        CHECK(calls.at("context test") == 1.0);
     }
-    const auto calls = impl.timer().get_summary_data(dealii::TimerOutput::n_calls);
-    REQUIRE(calls.size() == 1);
-    CHECK(calls.at("context test") == 1.0);
+    CHECK(test_context->n_subscriptions() == subscriptions);
+    CHECK(test_context->id() == identity);
 }
 
 int main(int argc, char** argv)
 {
     int result = EXIT_FAILURE;
     {
-        const auto context = rift::make_context(argc, argv);
+        rift::Context context(argc, argv);
         test_context = &context;
         result = Catch::Session().run(argc, argv);
         test_context = nullptr;
     }
     int finalized = 0;
+    // NOLINTNEXTLINE(misc-include-cleaner): the MPI API is provided by <mpi.h>.
     if (MPI_Finalized(&finalized) != MPI_SUCCESS || finalized == 0) {
         return EXIT_FAILURE;
     }

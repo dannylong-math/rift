@@ -15,7 +15,9 @@ Checks: >
   -misc-non-private-member-variables-in-classes,
   -portability-avoid-pragma-once,
   -readability-identifier-length,
-  -cppcoreguidelines-avoid-c-arrays
+  -cppcoreguidelines-avoid-c-arrays,
+  -bugprone-easily-swappable-parameters,
+  -readability-math-missing-parentheses
 
 WarningsAsErrors: ""
 HeaderFilterRegex: '(^|.*/)(include/rift|tests)/.*'

@@ -4,8 +4,9 @@
 
 - Rift is a C++23 research library for sharp-interface multiphase flow.
 - The library is being redesigned. Its current public APIs are semantic
-  version information in `rift/version.hpp` and the shared context handle in
-  `rift/context.hpp`; previous foundation APIs and tutorials have been removed.
+  version information in `rift/version.hpp`, the owning context in
+  `rift/context.hpp`, and basic distributed mesh operations in
+  `rift/discretization.hpp`; previous foundation APIs and tutorials have been removed.
   Do not present historical designs as implemented behavior.
 - The previous implementation is preserved at Git tag
   `reference/pre-reset-status`. Consult it with
@@ -68,6 +69,10 @@
   custom MPI wrappers or test registries. The context test creates its Rift
   context around `Catch::Session` so the context owns MPI initialization and
   finalization.
+- `context_initialization_test.cpp` deliberately initializes MPI directly in
+  its own executable, then verifies that Context rejects external initialization
+  without finalizing the caller's MPI session. Keep this rejection test separate
+  from normal Context-owned runtime tests.
 - GitHub CI uses Open MPI with `-DMPIEXEC_PREFLAGS=--oversubscribe` and runs
   CTest with `--parallel 1`, allowing the three-rank test on two-core runners.
   Keep MPI unit tests small in memory and runtime; oversubscribed runs provide
