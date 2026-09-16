@@ -90,7 +90,7 @@ static_assert(!std::is_move_assignable_v<Catalog>);
 // Catch2 assertion expansions inflate complexity; this scenario deliberately
 // checks the complete rank-local catalog lifecycle against one Context claim.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST_CASE("PhaseCatalog owns phases and freezes rank-local registration", "[phase_catalog][mpi]")
+TEST_CASE("PhaseCatalog owns phases and freezes collective registration", "[phase_catalog][mpi]")
 {
     REQUIRE(test_context != nullptr);
 
@@ -101,6 +101,11 @@ TEST_CASE("PhaseCatalog owns phases and freezes rank-local registration", "[phas
         // Exercise size() independently from the equivalent empty() query.
         // NOLINTNEXTLINE(readability-container-size-empty)
         CHECK(catalog.size() == 0);
+        CHECK_FALSE(catalog.is_frozen());
+
+        // NOLINTNEXTLINE(misc-include-cleaner): provided by catch_test_macros.hpp.
+        CHECK_THROWS_WITH(catalog.freeze(), Catch::Matchers::ContainsSubstring("empty PhaseCatalog"));
+        CHECK(catalog.empty());
         CHECK_FALSE(catalog.is_frozen());
 
         // NOLINTNEXTLINE(misc-include-cleaner): provided by catch_test_macros.hpp.
@@ -144,9 +149,10 @@ TEST_CASE("PhaseCatalog owns phases and freezes rank-local registration", "[phas
         CHECK(catalog.size() == 2);
 
         construction.action = ConstructionAction::succeed;
-        catalog.freeze_local();
-        catalog.freeze_local();
+        catalog.freeze();
+        catalog.freeze();
         CHECK(catalog.is_frozen());
+        CHECK(catalog.at(water_id).descriptor().id() == water_id);
         CHECK_THROWS_WITH(catalog.emplace<ConfigurablePhase>("ice", construction),
                           Catch::Matchers::ContainsSubstring("frozen"));
         CHECK_THROWS_WITH(catalog.emplace<AlternatePhase>("snow"), Catch::Matchers::ContainsSubstring("frozen"));

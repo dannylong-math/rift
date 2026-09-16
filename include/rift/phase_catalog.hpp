@@ -9,12 +9,15 @@
 #include "rift/phase.hpp"
 
 #include <algorithm>
+#include <array>
 #include <concepts>
 #include <cstddef>
 #include <deal.II/base/exceptions.h>
+#include <deal.II/base/mpi.h>
 #include <deal.II/base/observer_pointer.h>
 #include <deal.II/base/utilities.h>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -29,8 +32,8 @@ namespace rift {
  *
  * Exactly one catalog may claim a Context during that Context's lifetime. The
  * claim remains consumed after this catalog is destroyed. Registration and
- * local freeze are externally serialized configuration operations. Concurrent
- * const inspection is supported only after freeze_local() returns.
+ * collective freeze are externally serialized configuration operations.
+ * Concurrent const inspection is supported only after freeze() returns.
  */
 template<int dim, typename Number> class PhaseCatalog {
 public:
@@ -94,8 +97,30 @@ public:
         return id;
     }
 
-    /** \brief Idempotently prevent any further local registration. */
-    void freeze_local() noexcept { frozen_ = true; }
+    /**
+     * \brief Collectively verify descriptor agreement and prevent registration.
+     *
+     * Every rank in the Context communicator must call this operation. The
+     * ordered phase IDs, names, model IDs, and discretization IDs are compared
+     * against rank zero. Repeated collective calls after success are
+     * idempotent.
+     *
+     * \throws dealii::ExceptionBase If the catalogs differ or if every catalog
+     * is empty. Every catalog remains open and unchanged after either failure.
+     */
+    void freeze()
+    {
+        if (frozen_) {
+            return;
+        }
+
+        const auto signatures = dealii::Utilities::MPI::all_gather(context_->mpi_comm(), make_local_signature());
+        const std::string mismatch = first_mismatch(signatures);
+        AssertThrow(mismatch.empty(), dealii::ExcMessage(mismatch));
+        AssertThrow(!signatures.front().empty(),
+                    dealii::ExcMessage("Cannot freeze an empty PhaseCatalog; register at least one phase."));
+        frozen_ = true;
+    }
 
     /** \brief Return the number of successfully registered phases. */
     [[nodiscard]] std::size_t size() const noexcept { return phases_.size(); }
@@ -119,6 +144,58 @@ public:
     }
 
 private:
+    /** \brief Serializable values for ID, name, model, and discretization. */
+    using DescriptorSignature = std::array<std::string, 4>;
+    /** \brief Ordered semantic signature of one rank's complete catalog. */
+    using CatalogSignature = std::vector<DescriptorSignature>;
+
+    /** \brief Construct the semantic signature exchanged during freeze(). */
+    [[nodiscard]] CatalogSignature make_local_signature() const
+    {
+        CatalogSignature signature;
+        signature.reserve(phases_.size());
+        for (const auto& phase : phases_) {
+            const auto& descriptor = phase->descriptor();
+            signature.push_back({std::to_string(descriptor.id().index()), std::string(descriptor.name()),
+                                 std::string(descriptor.model_id().value()),
+                                 std::string(descriptor.discretization_id().value())});
+        }
+        return signature;
+    }
+
+    /** \brief Return the deterministic first mismatch, or an empty string. */
+    [[nodiscard]] static std::string first_mismatch(const std::vector<CatalogSignature>& signatures)
+    {
+        const auto& reference = signatures.front();
+        constexpr std::array<std::string_view, 4> field_names{"id", "name", "model id", "discretization id"};
+
+        for (std::size_t rank = 1; rank < signatures.size(); ++rank) {
+            const auto& candidate = signatures.at(rank);
+            if (candidate.size() != reference.size()) {
+                return "PhaseCatalog mismatch at rank " + std::to_string(rank) +
+                       ": phase count differs (rank 0: " + std::to_string(reference.size()) + ", rank " +
+                       std::to_string(rank) + ": " + std::to_string(candidate.size()) + ").";
+            }
+
+            for (std::size_t phase = 0; phase < reference.size(); ++phase) {
+                const auto& reference_phase = reference.at(phase);
+                const auto& candidate_phase = candidate.at(phase);
+                for (std::size_t field = 0; field < field_names.size(); ++field) {
+                    const auto& reference_value = reference_phase.at(field);
+                    const auto& candidate_value = candidate_phase.at(field);
+                    if (candidate_value != reference_value) {
+                        std::ostringstream message;
+                        message << "PhaseCatalog mismatch at rank " << rank << ", phase " << phase << ", field '"
+                                << field_names.at(field) << "' (rank 0: '" << reference_value << "', rank " << rank
+                                << ": '" << candidate_value << "').";
+                        return std::move(message).str();
+                    }
+                }
+            }
+        }
+        return {};
+    }
+
     /** \brief Context whose permanent catalog claim this object owns. */
     dealii::ObserverPointer<Context> context_;
     /** \brief Heterogeneous phases in dense identity order. */
